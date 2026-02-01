@@ -23,7 +23,7 @@
         "Typecheck passes"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -47,7 +47,7 @@
         "Typecheck passes"
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -64,7 +64,7 @@
         "Typecheck passes"
       ],
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "notes": "This story modifies src/crawl.ts to accumulate per-URL item records throughout the loop and write the metadata file after the loop exits. The saveContent function needs to return whether the content was new/changed/unchanged by comparing against the existing file on disk before writing."
     },
     {
@@ -80,7 +80,7 @@
         "Typecheck passes"
       ],
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "notes": "Depends on US-004 (metadata JSON output). At startup, read prior crawl-metadata.json. After the loop, diff prior successful items against the current run's visited set and append removed entries to the items map before computing stats and writing."
     },
     {
@@ -99,7 +99,7 @@
         "Typecheck passes"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "Depends on US-004 and US-005 being complete. The crawl module must be refactored to accept SEED_URL, SCOPE_PREFIX, and output directory as configuration (environment variables are the lowest-friction approach) so the integration test can point it at a mock server and temp directory without modifying source constants."
     }
   ]

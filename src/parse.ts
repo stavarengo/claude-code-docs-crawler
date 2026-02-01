@@ -28,6 +28,11 @@ export function parseUrls(body: string, baseUrl: string, scopePrefix: string): s
   const results: string[] = []
   for (const raw of found) {
     try {
+      // Skip strings that contain :// but lack a valid scheme — the URL
+      // constructor would otherwise silently treat them as relative paths.
+      if (raw.includes("://") && !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw)) {
+        continue
+      }
       const resolved = new URL(raw, baseUrl)
       resolved.hash = "" // strip fragment
       const normalized = resolved.href

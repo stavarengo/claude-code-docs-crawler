@@ -1,0 +1,89 @@
+# PRD: Docs Crawler
+
+Base commit: 89d0f5d6f38f0a1757d66d64a3da5bbf6bd937d8
+Final commit: 1f800e819a2bf6bae1024e7222e5e918ac29596d
+
+## Codebase Patterns
+
+- Tests use `node:test` (describe/it) with `node:assert` — no third-party test framework
+- Run tests with `node --import tsx --test test/*.test.ts`
+- Single tsconfig: `tsconfig.node.json` — no `tsconfig.json`; run typecheck with `npx tsc --project tsconfig.node.json`
+- ESM project (`"type": "module"`)
+- Strict TypeScript: `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, `useUnknownInCatchVariables` all enabled
+- `noPropertyAccessFromIndexSignature`: use bracket notation for `Record<string, T>` — `obj["key"]` not `obj.key`
+- `noUncheckedIndexedAccess`: indexing `Record<string, number>` yields `number | undefined`; use `(obj[key] ?? 0)` pattern
+- ESLint: use `interface` not `type` for object shapes; use `RegExp.exec()` not `String.match()`
+- Guard ESM script entry points with `fileURLToPath(import.meta.url) === process.argv[1]` — do NOT match on filename substring
+
+
+## 2026-02-01 - US-002
+
+- Implemented unit tests for `parseUrls` in `test/parse.test.ts` (11 tests covering all acceptance criteria)
+- Fixed a bug in `src/parse.ts`: strings containing `://` without a valid scheme (e.g. `://not a url`) were silently resolved as relative paths by the URL constructor instead of being skipped. Added a guard that skips any raw URL containing `://` that does not match a valid scheme prefix (`/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//`).
+- Files changed: `test/parse.test.ts` (new), `src/parse.ts` (malformed-URL guard)
+- **Learnings for future iterations:**
+
+  - `new URL(raw, baseUrl)` does NOT throw for strings like `://foo` — it treats them as relative paths. Any input containing `://` without a proper scheme must be explicitly skipped before calling the URL constructor.
+  - ESLint enforces double quotes (`@stylistic/quotes`). Use template literals (backticks) for strings that need to contain double quotes.
+  - The `typecheck` npm script references a non-existent `tsconfig.json`. Use `npx tsc --project tsconfig.node.json` directly (or fix the script).
+
+---
+
+## 2026-02-01 - US-003
+
+- Implemented unit tests for `fetchWithRedirects` in `test/fetch.test.ts` (11 tests covering all acceptance criteria)
+- Tests use `node:http createServer` with `beforeEach`/`afterEach` to spin up and tear down a mock server on a random port for each test
+- Files changed: `test/fetch.test.ts` (new)
+- **Learnings for future iterations:**
+
+  - Use `server.listen(0)` to get an OS-assigned port, then read it back with `(server.address() as { port: number }).port`. This avoids port conflicts in parallel test runs.
+  - For the network-error test (connection refused), use port 1 (`http://localhost:1`) — it's reliably not listening and the OS rejects the connection immediately.
+  - The `fetchWithRedirects` function uses `redirect: "manual"` on the native `fetch`, so 3xx responses come back as regular responses with a `location` header — the mock server just needs to return 3xx + Location.
+
+---
+
+## 2026-02-01 - US-004
+
+- Refactored `src/crawl.ts`: extracted `saveContent` and `buildMetadata` as exported functions; wrapped the crawl loop in an `async crawl()` function guarded by `import.meta.url` check so the module can be imported without triggering execution
+- `saveContent` now accepts an optional `contentDir` parameter and returns `"new" | "changed" | "unchanged"` by comparing the incoming body against the existing file on disk before writing. When unchanged, the file is not rewritten.
+- `buildMetadata` computes the full metadata structure in a single pass over the items map: determines `result` (success/partial/aborted), computes all `stats` counters, and converts the Map to a plain object for JSON serialization
+- The crawl loop now tracks an `items` Map throughout execution, recording per-URL status and statusReason after each fetch result. After the loop, it writes `content/crawl-metadata.json`.
+- Files changed: `src/crawl.ts` (refactored + metadata logic), `test/crawl-metadata.test.ts` (new, 8 tests)
+- **Learnings for future iterations:**
+
+  - Top-level ESM scripts that need to be importable for testing must guard their entry point. Use `fileURLToPath(import.meta.url)` compared against `process.argv[1]` — do NOT use `process.argv[1].includes("module-name")` because test file paths may also match.
+  - This codebase uses `noPropertyAccessFromIndexSignature` — always use bracket notation (`stats["key"]`) not dot notation for `Record<string, T>` properties.
+  - `noUncheckedIndexedAccess` means indexing into `Record<string, number>` yields `number | undefined`. Use a helper like `(stats[key] ?? 0) + 1` to increment safely.
+  - ESLint enforces `interface` over `type` for object type definitions (`@typescript-eslint/consistent-type-definitions`).
+  - ESLint enforces `RegExp.exec()` over `String.match()` (`@typescript-eslint/prefer-regexp-exec`).
+
+---
+
+## 2026-02-01 - US-005
+
+- Implemented removed-page detection: added exported `markRemovedItems` function to `src/crawl.ts` that diffs previous metadata items against the current run's visited set
+- Integrated into `crawl()`: prior `crawl-metadata.json` is loaded at startup; `markRemovedItems` is called after the loop before `buildMetadata`
+- Removed duplicate `metadataPath` declaration that arose from moving the load-prior-metadata block earlier in the function
+- Added 6 unit tests in `test/crawl-metadata.test.ts` covering: marking removed items, excluding failed/skipped items, not re-marking visited items, re-marking previously removed items, empty prior metadata, and stats counting of removed items
+- Files changed: `src/crawl.ts` (markRemovedItems function + crawl loop integration), `test/crawl-metadata.test.ts` (6 new tests), `docs/ai/ralph/current/prd.json` (US-005 passes: true)
+- **Learnings for future iterations:**
+
+  - `markRemovedItems` only checks `status === "success"` on prior items — previously removed items (status: "success", statusReason: "removed") are correctly re-marked because their status is still "success". No special case needed.
+  - Prior metadata is loaded via sync `readFileSync` at the top of `crawl()` before the async loop — this is fine because it's a one-time startup read of a small JSON file.
+  - The `metadataPath` variable is reused for both reading prior metadata and writing new metadata; declaring it once near the top of the function avoids duplication.
+
+---
+
+## 2026-02-01 - US-006
+
+- Exported `crawl()` from `src/crawl.ts` and made it read `SEED_URL`, `SCOPE_PREFIX`, and `CONTENT_DIR` from environment variables (falling back to hardcoded defaults). This is the minimal change needed for the integration test to point the crawl at a mock server and temp directory.
+- Fixed production `SEED_URL` constant: was `https://code.claude.com/docs/en/llms.txt`, corrected to `https://code.claude.com/docs/llms.txt` (no `/en/` segment in the seed path).
+- Wrote `test/crawl.test.ts`: spins up a mock HTTP server with 4 pages (seed + 3 linked pages), one in-scope 301 redirect, and one out-of-scope link. Verifies all in-scope pages are saved, out-of-scope content is not saved, and `crawl-metadata.json` is written with correct stats and per-item status/statusReason.
+- Files changed: `src/crawl.ts` (exported `crawl`, env-var config, SEED_URL fix), `test/crawl.test.ts` (new)
+- **Learnings for future iterations:**
+
+  - In-scope redirects are followed transparently by `fetchWithRedirects` — the redirect URL itself never appears in `items`. The resolved `finalUrl` is used as the key. If the target was already fetched and saved, the second save returns `"unchanged"` and overwrites the prior item record.
+  - Out-of-scope links referenced in page content are filtered by `parseUrls` before enqueueing — they never reach `fetchWithRedirects` and never appear in metadata items. Only out-of-scope *redirects* (where the initial URL is in-scope but the 301 target is not) produce skipped items.
+  - Environment variables are the lowest-friction way to override crawl config for tests: no new function signatures, no dependency injection — just `process.env` reads with fallbacks.
+
+---
