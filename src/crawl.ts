@@ -1,26 +1,20 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { fetchWithRedirects } from './lib/fetch.js';
-import { parseUrls } from './lib/parse.js';
+import { fetchWithRedirects } from './fetch.js';
+import { parseUrls } from './parse.js';
 
 const SEED_URL = 'https://code.claude.com/docs/en/llms.txt';
 const SCOPE_PREFIX = 'https://code.claude.com/docs/en/';
 
-/** @type {string[]} */
-const queue = [];              // URLs waiting to be fetched
-const queued = new Set();      // O(1) check: is URL in queue?
-const fetched = new Set();     // URLs successfully fetched
-const attempts = new Map();    // url → attempt count (1-3)
-let consecutive429s = 0;       // abort at 3
+const queue: string[] = [];                          // URLs waiting to be fetched
+const queued = new Set<string>();                    // O(1) check: is URL in queue?
+const fetched = new Set<string>();                   // URLs successfully fetched
+const attempts = new Map<string, number>();          // url → attempt count (1-3)
+let consecutive429s = 0;                             // abort at 3
 
-/** @param {number} ms */
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
-/**
- * @param {string} url
- * @returns {string | null}
- */
-function normalize(url) {
+function normalize(url: string): string | null {
     try {
         const parsed = new URL(url);
         parsed.hash = '';
@@ -30,8 +24,7 @@ function normalize(url) {
     }
 }
 
-/** @param {string} url */
-function enqueue(url) {
+function enqueue(url: string) {
     const normalized = normalize(url);
     if (!normalized) return;
     if (queued.has(normalized) || fetched.has(normalized)) return;
@@ -39,24 +32,18 @@ function enqueue(url) {
     queued.add(normalized);
 }
 
-/** @returns {string | undefined} */
-function dequeue() {
+function dequeue(): string | undefined {
     const url = queue.shift();
     if (url) queued.delete(url);
     return url;
 }
 
-/** @param {string} url */
-function requeue(url) {
+function requeue(url: string) {
     queue.push(url);
     queued.add(url);
 }
 
-/**
- * @param {string} url
- * @param {string} body
- */
-async function saveContent(url, body) {
+async function saveContent(url: string, body: string) {
     const parsed = new URL(url);
     let filePath = path.join('content', parsed.host, parsed.pathname);
 
@@ -77,7 +64,7 @@ while (queue.length > 0) {
     const url = dequeue();
     if (!url) continue;
 
-    const attemptCount = (attempts.get(url) || 0) + 1;
+    const attemptCount = (attempts.get(url) ?? 0) + 1;
 
     if (attemptCount > 3) {
         console.log(`Giving up on ${url} after 3 attempts`);
@@ -98,21 +85,22 @@ while (queue.length > 0) {
             }
             break;
 
-        case 'rate-limited':
+        case 'rate-limited': {
             consecutive429s++;
             if (consecutive429s >= 3) {
                 console.error('Aborting: 3 consecutive 429 responses');
                 process.exit(1);
             }
-            const delay = result.retryAfter || 5000;
-            console.log(`Rate limited, waiting ${delay}ms...`);
+            const delay = result.retryAfter ?? 5000;
+            console.log(`Rate limited, waiting ${String(delay)}ms...`);
             await sleep(delay);
             requeue(url);
             break;
+        }
 
         case 'error':
             consecutive429s = 0;  // non-429 resets the streak
-            console.log(`Error fetching ${url}: ${result.reason || result.status}`);
+            console.log(`Error fetching ${url}: ${result.reason ?? String(result.status)}`);
             requeue(url);
             break;
 
@@ -126,4 +114,4 @@ while (queue.length > 0) {
     }
 }
 
-console.log(`Done. Fetched ${fetched.size} pages.`);
+console.log(`Done. Fetched ${String(fetched.size)} pages.`);

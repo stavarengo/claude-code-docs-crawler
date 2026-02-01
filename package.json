@@ -2,13 +2,37 @@
   "name": "claude-code-docs-crawler",
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": "24.12.0"
+  },
   "scripts": {
-    "crawl": "node crawl.js",
-    "typecheck": "tsc --project jsconfig.json",
-    "test": "node --test"
+    "crawl": "tsx src/crawl.ts",
+    "typecheck": "tsc --project tsconfig.json",
+    "test": "node --import tsx --test test/*.test.ts",
+    "lint": "eslint . && stylelint '**/*.css'",
+    "lint:js": "eslint .",
+    "lint:css": "stylelint '**/*.css'",
+    "lint:fix": "eslint . --fix",
+    "ncu": "ncu -- --target latest --upgrade && npm install",
+    "prepare": "husky"
   },
   "devDependencies": {
+    "@eslint/compat": "2.0.2",
+    "@eslint/js": "^9.39.2",
+    "@eslint/json": "1.0.0",
+    "@eslint/markdown": "7.5.1",
+    "@stylistic/eslint-plugin": "5.7.1",
     "@types/node": "^25.1.0",
-    "typescript": "^5.9.3"
+    "eslint": "^9.39.2",
+    "eslint-plugin-jsdoc": "^50.0.0",
+    "globals": "^17.3.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
+    "npm-check-updates": "19.3.2",
+    "stylelint": "^17.1.0",
+    "stylelint-config-standard": "^40.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.54.0"
   }
 }

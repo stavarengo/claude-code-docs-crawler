@@ -3,9 +3,9 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "target": "ES2022",
-    "checkJs": true,
     "strict": true,
-    "noEmit": true
+    "noEmit": true,
+    "allowJs": true
   },
-  "include": ["*.js", "lib/**/*.js", "test/**/*.js"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "*.config.js"]
 }

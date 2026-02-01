@@ -1,11 +1,5 @@
-/**
- * @param {string} body
- * @param {string} baseUrl
- * @param {string} scopePrefix
- * @returns {string[]}
- */
-export function parseUrls(body, baseUrl, scopePrefix) {
-    const found = new Set();
+export function parseUrls(body: string, baseUrl: string, scopePrefix: string): string[] {
+    const found = new Set<string>();
 
     // Markdown links: [text](url)
     for (const match of body.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
@@ -28,7 +22,7 @@ export function parseUrls(body, baseUrl, scopePrefix) {
     }
 
     // Resolve, normalize, filter
-    const results = [];
+    const results: string[] = [];
     for (const raw of found) {
         try {
             const resolved = new URL(raw, baseUrl);

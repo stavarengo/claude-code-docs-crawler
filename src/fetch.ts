@@ -1,19 +1,20 @@
-/**
- * @param {string} url
- * @param {string} scopePrefix
- * @param {number} [maxRedirects]
- * @returns {Promise<{type: 'success', finalUrl: string, body: string} | {type: 'out-of-scope', originalUrl: string, redirectedTo: string} | {type: 'rate-limited', retryAfter: number | null} | {type: 'error', reason?: string, status?: number} | {type: 'non-text', contentType: string, url: string}>}
- */
-export async function fetchWithRedirects(url, scopePrefix, maxRedirects = 10) {
+export type FetchResult =
+    | { type: 'success'; finalUrl: string; body: string }
+    | { type: 'out-of-scope'; originalUrl: string; redirectedTo: string }
+    | { type: 'rate-limited'; retryAfter: number | null }
+    | { type: 'error'; reason?: string; status?: number }
+    | { type: 'non-text'; contentType: string; url: string };
+
+export async function fetchWithRedirects(url: string, scopePrefix: string, maxRedirects = 10): Promise<FetchResult> {
     let currentUrl = url;
     let redirectCount = 0;
 
     while (redirectCount < maxRedirects) {
-        let response;
+        let response: Response;
         try {
             response = await fetch(currentUrl, { redirect: 'manual' });
         } catch (err) {
-            return { type: 'error', reason: /** @type {Error} */ (err).message };
+            return { type: 'error', reason: (err as Error).message };
         }
 
         // Handle redirects (3xx)
@@ -47,7 +48,7 @@ export async function fetchWithRedirects(url, scopePrefix, maxRedirects = 10) {
         }
 
         // Check content-type - only process text-based content
-        const contentType = response.headers.get('content-type') || '';
+        const contentType = response.headers.get('content-type') ?? '';
         if (!isTextContent(contentType)) {
             return { type: 'non-text', contentType, url: currentUrl };
         }
@@ -60,21 +61,13 @@ export async function fetchWithRedirects(url, scopePrefix, maxRedirects = 10) {
     return { type: 'error', reason: 'Too many redirects' };
 }
 
-/**
- * @param {string | null} header
- * @returns {number | null}
- */
-function parseRetryAfter(header) {
+function parseRetryAfter(header: string | null): number | null {
     if (!header) return null;
     const seconds = parseInt(header, 10);
     return isNaN(seconds) ? null : seconds * 1000;
 }
 
-/**
- * @param {string} contentType
- * @returns {boolean}
- */
-function isTextContent(contentType) {
+function isTextContent(contentType: string): boolean {
     const type = contentType.toLowerCase();
     return type.startsWith('text/') ||
            type.includes('application/json') ||
