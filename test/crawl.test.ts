@@ -96,10 +96,10 @@ describe("US-006: Integration test for full crawl pipeline", () => {
     const host = `localhost:${String(port)}`
 
     // --- Assert in-scope pages were saved ---
-    const indexPath = path.join(TEST_CONTENT_DIR, host, "docs", "index.txt")
-    const pageAPath = path.join(TEST_CONTENT_DIR, host, "docs", "page-a", "index.txt")
-    const pageBPath = path.join(TEST_CONTENT_DIR, host, "docs", "page-b", "index.txt")
-    const pageCPath = path.join(TEST_CONTENT_DIR, host, "docs", "page-c", "index.txt")
+    const indexPath = path.join(TEST_CONTENT_DIR, "docs", host, "docs", "index.txt")
+    const pageAPath = path.join(TEST_CONTENT_DIR, "docs", host, "docs", "page-a", "index.txt")
+    const pageBPath = path.join(TEST_CONTENT_DIR, "docs", host, "docs", "page-b", "index.txt")
+    const pageCPath = path.join(TEST_CONTENT_DIR, "docs", host, "docs", "page-c", "index.txt")
 
     assert.ok(existsSync(indexPath), `seed index saved at ${indexPath}`)
     assert.ok(existsSync(pageAPath), `page-a saved at ${pageAPath}`)
@@ -114,7 +114,7 @@ describe("US-006: Integration test for full crawl pipeline", () => {
 
     // --- Assert out-of-scope URL was NOT saved ---
     // external.example.com should not appear anywhere in the content dir
-    const externalPath = path.join(TEST_CONTENT_DIR, "external.example.com")
+    const externalPath = path.join(TEST_CONTENT_DIR, "docs", "external.example.com")
     assert.ok(!existsSync(externalPath), "out-of-scope external.example.com was not saved")
 
     // --- Assert crawl-metadata.json was written with correct structure ---

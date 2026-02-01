@@ -39,6 +39,7 @@ function getRepoRoot(): string {
 
 const REPO_ROOT = getRepoRoot()
 const DEFAULT_CONTENT_DIR = path.join(REPO_ROOT, "content")
+const DOWNLOADS_SUBDIR = "docs"
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
@@ -233,6 +234,7 @@ export async function crawl(opts?: { showGitDiff?: boolean }) {
   const scopePrefix = process.env["SCOPE_PREFIX"] ?? SCOPE_PREFIX
   const scopePrefixes = [scopePrefix, ...ADDITIONAL_SCOPE_PREFIXES]
   const contentDir = resolveContentDir(process.env["CONTENT_DIR"] ?? DEFAULT_CONTENT_DIR)
+  const downloadsDir = path.join(contentDir, DOWNLOADS_SUBDIR)
 
   const queue: string[] = []
   const queued = new Set<string>()
@@ -316,7 +318,7 @@ export async function crawl(opts?: { showGitDiff?: boolean }) {
             enqueue(rawUrl)
           }
         } else {
-          const changeStatus = await saveContent(result.finalUrl, result.body, contentDir)
+          const changeStatus = await saveContent(result.finalUrl, result.body, downloadsDir)
           const key = urlToRelativePath(result.finalUrl)
           urlResolution[url] = { finalUrl: result.finalUrl, savedPath: key }
           urlResolution[result.finalUrl] = { finalUrl: result.finalUrl, savedPath: key }
@@ -399,7 +401,7 @@ export async function crawl(opts?: { showGitDiff?: boolean }) {
   markRemovedItems(previousItems, items)
 
   // Rewrite absolute markdown links to local relative paths (when a downloaded local file exists)
-  const rewriteResult = await rewriteMarkdownLinksInContent(contentDir, urlResolution, { showGitDiff: opts?.showGitDiff === true })
+  const rewriteResult = await rewriteMarkdownLinksInContent(downloadsDir, urlResolution, { showGitDiff: opts?.showGitDiff === true })
   if (rewriteResult.stats.changedFiles > 0) {
     console.log(
       `Rewrote links in ${String(rewriteResult.stats.changedFiles)}/${String(rewriteResult.stats.scannedFiles)} markdown files.`,

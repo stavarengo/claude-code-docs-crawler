@@ -63,8 +63,8 @@ override these via `process.env` before calling `crawl()` and restore them in a
 - `FetchResult` success variant includes `contentType: string`. Omitting it from
   test assertions causes `deepStrictEqual` failures.
 
-- GitHub `.md` files are saved under `content/raw.githubusercontent.com/…`, not
-  `content/github.com/…`. When computing paths to GitHub content (e.g. for relative
+- GitHub `.md` files are saved under `content/docs/raw.githubusercontent.com/…`, not
+  `content/docs/github.com/…`. When computing paths to GitHub content (e.g. for relative
   link rewriting), apply `toRawGitHubUrl()` first — the blob URL in the original
   markdown is `github.com/{owner}/{repo}/blob/{branch}/{path}` but the file on disk
   lives under `raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}`.
@@ -78,4 +78,4 @@ starts with `https://`:
    - code.claude.com URLs → `urlToRelativePath(url)` (already exists in crawl.ts).
    - GitHub blob URLs → apply `toRawGitHubUrl()` first, then use host+pathname.
 2. If that file exists on disk, replace the absolute URL with
-   `path.relative(dirname(currentFile), targetFile)` (both rooted at `content/`).
+   `path.relative(dirname(currentFile), targetFile)` (both rooted at `content/docs/`).
