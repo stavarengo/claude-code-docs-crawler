@@ -1,0 +1,106 @@
+{
+  "project": "claude-code-docs-crawler",
+  "prd": "docs/ai/ralph/backlog/2026-02-01.docs-crawler/prd.2026-02-01.docs-crawler.md",
+  "branchName": "ralph/docs-crawler",
+  "description": "Docs Crawler — add crawl metadata JSON tracking and automated test coverage for parse, fetch, and end-to-end crawl pipeline",
+  "userStories": [
+    {
+      "id": "US-002",
+      "title": "Unit tests for URL parser (src/parse.ts)",
+      "description": "As a developer, I want automated tests for parseUrls so that regressions in URL extraction are caught before they reach production.",
+      "acceptanceCriteria": [
+        "Test file exists at test/parse.test.ts",
+        "Tests cover markdown inline links [text](url)",
+        "Tests cover markdown reference links [label]: url",
+        "Tests cover HTML href attributes",
+        "Tests cover bare https:// URLs",
+        "Tests verify relative URLs are resolved against the provided baseUrl",
+        "Tests verify fragment (#section) stripping",
+        "Tests verify out-of-scope URLs are filtered out",
+        "Tests verify duplicate URLs are deduplicated in the returned array",
+        "Tests verify invalid/malformed URLs are silently skipped (no throw)",
+        "All tests pass with node --test",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Unit tests for fetch module (src/fetch.ts)",
+      "description": "As a developer, I want automated tests for fetchWithRedirects so that redirect handling, scope enforcement, rate-limit logic, and content-type filtering are verified without hitting a live server.",
+      "acceptanceCriteria": [
+        "Test file exists at test/fetch.test.ts",
+        "Tests use a local mock HTTP server via node:http createServer — no external dependencies",
+        "Tests cover: successful fetch returns { type: 'success', finalUrl, body }",
+        "Tests cover: single redirect within scope is followed and finalUrl reflects the redirected URL",
+        "Tests cover: redirect chain (multiple hops) within scope is followed up to maxRedirects",
+        "Tests cover: redirect to out-of-scope URL returns { type: 'out-of-scope', redirectedTo }",
+        "Tests cover: exceeding maxRedirects returns { type: 'error', reason: 'Too many redirects' }",
+        "Tests cover: HTTP 429 returns { type: 'rate-limited' } with retryAfter parsed from Retry-After header in milliseconds",
+        "Tests cover: HTTP 429 without Retry-After header returns retryAfter: null",
+        "Tests cover: non-2xx status (e.g. 404, 500) returns { type: 'error', status }",
+        "Tests cover: non-text content-type returns { type: 'non-text', contentType }",
+        "Tests cover: network error (server refuses connection) returns { type: 'error', reason }",
+        "All tests pass with node --test",
+        "Typecheck passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Crawl metadata JSON output",
+      "description": "As a developer, I want the crawler to write a metadata JSON file after each run so that I can audit what happened, compare runs, and detect drift.",
+      "acceptanceCriteria": [
+        "After the crawl loop completes, a file is written to content/crawl-metadata.json",
+        "The JSON has top-level keys: seedUrl, scopePrefix, lastUpdate (ISO 8601), result ('success' | 'partial' | 'aborted'), stats, and items",
+        "result is 'success' when the loop exits normally with no failures, 'partial' when at least one URL has status 'failed', and 'aborted' when exiting due to 3 consecutive 429s",
+        "stats contains: uniqueUrls, success, success.new, success.changed, success.unchanged, success.removed, skipped, skipped.outOfScope, skipped.duplicate, skipped.redirectOutOfScope, skipped.redirectDuplicate, failed, failed.httpError — all derived from the items map in a single pass",
+        "items is a map from relative path (for in-scope URLs) or full URL (for out-of-scope) to { status, statusReason, fetchedAt }",
+        "On successful fetch: compare fetched body against previously saved file. statusReason is 'new' if no prior file exists, 'changed' if content differs, 'unchanged' if content is identical. Do not re-write the file when unchanged.",
+        "Typecheck passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "This story modifies src/crawl.ts to accumulate per-URL item records throughout the loop and write the metadata file after the loop exits. The saveContent function needs to return whether the content was new/changed/unchanged by comparing against the existing file on disk before writing."
+    },
+    {
+      "id": "US-005",
+      "title": "Detect removed pages across crawl runs",
+      "description": "As a developer, I want the crawler to flag pages that existed in a previous crawl but were not reached in the current run, so I know when upstream content disappears.",
+      "acceptanceCriteria": [
+        "Before the crawl loop starts, if content/crawl-metadata.json exists from a prior run, its items are loaded into memory",
+        "After the crawl loop completes, any item from the previous metadata that had status 'success' and was not visited in the current run is recorded in the current metadata with status 'success' and statusReason 'removed'",
+        "The corresponding file in content/ is NOT deleted — only the metadata flags it as removed",
+        "stats.success.removed reflects the count of removed items",
+        "stats.uniqueUrls includes removed items in its total",
+        "Typecheck passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "Depends on US-004 (metadata JSON output). At startup, read prior crawl-metadata.json. After the loop, diff prior successful items against the current run's visited set and append removed entries to the items map before computing stats and writing."
+    },
+    {
+      "id": "US-006",
+      "title": "Integration test for the full crawl pipeline",
+      "description": "As a developer, I want an end-to-end test that runs the actual crawl loop against a controlled mock server, so I can verify that fetch, parse, save, and metadata all work together correctly.",
+      "acceptanceCriteria": [
+        "Test file exists at test/crawl.test.ts",
+        "Test spins up a local mock HTTP server serving a small linked set of pages (3-4 pages with cross-links, one redirect, one out-of-scope link)",
+        "SEED_URL and SCOPE_PREFIX are overridden to point at the mock server (via environment variables or module-level config — choose the approach that requires minimal changes to crawl.ts)",
+        "Test asserts all in-scope pages were saved to expected file paths under a temp content/ directory",
+        "Test asserts out-of-scope URLs were not saved",
+        "Test asserts crawl-metadata.json was written with correct stats and per-item status/statusReason values",
+        "Test cleans up the temp output directory after running",
+        "All tests pass with node --test",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "Depends on US-004 and US-005 being complete. The crawl module must be refactored to accept SEED_URL, SCOPE_PREFIX, and output directory as configuration (environment variables are the lowest-friction approach) so the integration test can point it at a mock server and temp directory without modifying source constants."
+    }
+  ]
+}
