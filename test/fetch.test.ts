@@ -5,7 +5,7 @@ import { fetchWithRedirects } from "../src/fetch.ts"
 
 let server: Server
 let baseUrl: string
-let scopePrefix: string
+let scopePrefixes: string[]
 
 beforeEach(() => {
   server = createServer((req, res) => {
@@ -84,7 +84,7 @@ beforeEach(() => {
   server.listen(0)
   const { port } = server.address() as { port: number }
   baseUrl = `http://localhost:${port}`
-  scopePrefix = baseUrl
+  scopePrefixes = [baseUrl]
 })
 
 afterEach(() => {
@@ -93,34 +93,37 @@ afterEach(() => {
 
 describe("US-003: fetchWithRedirects", () => {
   it("returns success with finalUrl and body for a 200 text response", async () => {
-    const result = await fetchWithRedirects(`${baseUrl}/ok`, scopePrefix)
+    const result = await fetchWithRedirects(`${baseUrl}/ok`, scopePrefixes)
     assert.deepStrictEqual(result, {
       type: "success",
       finalUrl: `${baseUrl}/ok`,
       body: "<h1>Hello</h1>",
+      contentType: "text/html",
     })
   })
 
   it("follows a single redirect within scope and reflects the final URL", async () => {
-    const result = await fetchWithRedirects(`${baseUrl}/redirect-once`, scopePrefix)
+    const result = await fetchWithRedirects(`${baseUrl}/redirect-once`, scopePrefixes)
     assert.deepStrictEqual(result, {
       type: "success",
       finalUrl: `${baseUrl}/ok`,
       body: "<h1>Hello</h1>",
+      contentType: "text/html",
     })
   })
 
   it("follows a multi-hop redirect chain within scope", async () => {
-    const result = await fetchWithRedirects(`${baseUrl}/redirect-chain-a`, scopePrefix)
+    const result = await fetchWithRedirects(`${baseUrl}/redirect-chain-a`, scopePrefixes)
     assert.deepStrictEqual(result, {
       type: "success",
       finalUrl: `${baseUrl}/redirect-chain-c`,
       body: "<h1>End of chain</h1>",
+      contentType: "text/html",
     })
   })
 
   it("returns out-of-scope when a redirect leaves the scope prefix", async () => {
-    const result = await fetchWithRedirects(`${baseUrl}/redirect-out-of-scope`, scopePrefix)
+    const result = await fetchWithRedirects(`${baseUrl}/redirect-out-of-scope`, scopePrefixes)
     assert.deepStrictEqual(result, {
       type: "out-of-scope",
       originalUrl: `${baseUrl}/redirect-out-of-scope`,
@@ -129,7 +132,7 @@ describe("US-003: fetchWithRedirects", () => {
   })
 
   it("returns error with 'Too many redirects' when maxRedirects is exceeded", async () => {
-    const result = await fetchWithRedirects(`${baseUrl}/redirect-loop`, scopePrefix, 3)
+    const result = await fetchWithRedirects(`${baseUrl}/redirect-loop`, scopePrefixes, 3)
     assert.deepStrictEqual(result, {
       type: "error",
       reason: "Too many redirects",
@@ -137,7 +140,7 @@ describe("US-003: fetchWithRedirects", () => {
   })
 
   it("returns rate-limited with retryAfter in milliseconds when Retry-After header is present", async () => {
-    const result = await fetchWithRedirects(`${baseUrl}/rate-limited-with-header`, scopePrefix)
+    const result = await fetchWithRedirects(`${baseUrl}/rate-limited-with-header`, scopePrefixes)
     assert.deepStrictEqual(result, {
       type: "rate-limited",
       retryAfter: 5000,
@@ -145,7 +148,7 @@ describe("US-003: fetchWithRedirects", () => {
   })
 
   it("returns rate-limited with retryAfter null when Retry-After header is absent", async () => {
-    const result = await fetchWithRedirects(`${baseUrl}/rate-limited-no-header`, scopePrefix)
+    const result = await fetchWithRedirects(`${baseUrl}/rate-limited-no-header`, scopePrefixes)
     assert.deepStrictEqual(result, {
       type: "rate-limited",
       retryAfter: null,
@@ -153,7 +156,7 @@ describe("US-003: fetchWithRedirects", () => {
   })
 
   it("returns error with status for a 404 response", async () => {
-    const result = await fetchWithRedirects(`${baseUrl}/not-found`, scopePrefix)
+    const result = await fetchWithRedirects(`${baseUrl}/not-found`, scopePrefixes)
     assert.deepStrictEqual(result, {
       type: "error",
       status: 404,
@@ -161,7 +164,7 @@ describe("US-003: fetchWithRedirects", () => {
   })
 
   it("returns error with status for a 500 response", async () => {
-    const result = await fetchWithRedirects(`${baseUrl}/server-error`, scopePrefix)
+    const result = await fetchWithRedirects(`${baseUrl}/server-error`, scopePrefixes)
     assert.deepStrictEqual(result, {
       type: "error",
       status: 500,
@@ -169,7 +172,7 @@ describe("US-003: fetchWithRedirects", () => {
   })
 
   it("returns non-text when content-type is not text-based", async () => {
-    const result = await fetchWithRedirects(`${baseUrl}/binary`, scopePrefix)
+    const result = await fetchWithRedirects(`${baseUrl}/binary`, scopePrefixes)
     assert.deepStrictEqual(result, {
       type: "non-text",
       contentType: "application/octet-stream",
@@ -179,7 +182,7 @@ describe("US-003: fetchWithRedirects", () => {
 
   it("returns error with reason when the server refuses the connection", async () => {
     // Use a port where nothing is listening
-    const result = await fetchWithRedirects("http://localhost:1", scopePrefix)
+    const result = await fetchWithRedirects("http://localhost:1", scopePrefixes)
     assert.strictEqual(result.type, "error")
     assert.ok("reason" in result && typeof result.reason === "string")
     assert.ok(result.reason.length > 0)

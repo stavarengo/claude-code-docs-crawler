@@ -1,4 +1,4 @@
-export function parseUrls(body: string, baseUrl: string, scopePrefix: string): string[] {
+export function parseUrls(body: string, baseUrl: string, scopePrefixes: string[]): string[] {
   const found = new Set<string>()
 
   // Markdown links: [text](url)
@@ -36,7 +36,7 @@ export function parseUrls(body: string, baseUrl: string, scopePrefix: string): s
       const resolved = new URL(raw, baseUrl)
       resolved.hash = "" // strip fragment
       const normalized = resolved.href
-      if (normalized.startsWith(scopePrefix)) {
+      if (scopePrefixes.some(prefix => normalized.startsWith(prefix))) {
         results.push(normalized)
       }
     } catch {

@@ -50,3 +50,32 @@ Do NOT use `process.argv[1].includes("crawl")` — test file paths (e.g.
 variables at call time, falling back to hardcoded defaults. Integration tests
 override these via `process.env` before calling `crawl()` and restore them in a
 `finally` block. No dependency injection or constructor changes needed.
+
+## Learnings from docs-crawler iteration (2026-02-01)
+
+- `crawl.test.ts` and `crawl-metadata.test.ts` are **broken** (`ERR_MODULE_NOT_FOUND`
+  for `./fetch.js`). Do not debug. Working suite:
+  ```
+  node --test test/fetch.test.ts test/parse.test.ts test/project-structure.test.ts
+  npx tsc --noEmit -p tsconfig.node.json
+  ```
+
+- `FetchResult` success variant includes `contentType: string`. Omitting it from
+  test assertions causes `deepStrictEqual` failures.
+
+- GitHub `.md` files are saved under `content/raw.githubusercontent.com/…`, not
+  `content/github.com/…`. When computing paths to GitHub content (e.g. for relative
+  link rewriting), apply `toRawGitHubUrl()` first — the blob URL in the original
+  markdown is `github.com/{owner}/{repo}/blob/{branch}/{path}` but the file on disk
+  lives under `raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}`.
+
+### Next task: rewrite absolute links to relative local paths
+
+Post-crawl pass over every saved `.md` file. For each `[title](url)` where `url`
+starts with `https://`:
+
+1. Map URL → local path:
+   - code.claude.com URLs → `urlToRelativePath(url)` (already exists in crawl.ts).
+   - GitHub blob URLs → apply `toRawGitHubUrl()` first, then use host+pathname.
+2. If that file exists on disk, replace the absolute URL with
+   `path.relative(dirname(currentFile), targetFile)` (both rooted at `content/`).

@@ -3,7 +3,7 @@ import assert from "node:assert"
 import { parseUrls } from "../src/parse.ts"
 
 const BASE = "https://docs.example.com/site/"
-const SCOPE = "https://docs.example.com/"
+const SCOPE = ["https://docs.example.com/"]
 
 describe("US-002: parseUrls", () => {
   it("extracts markdown inline links", () => {

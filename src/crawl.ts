@@ -10,6 +10,9 @@ const writeFileAsync = promisify(writeFile)
 
 const SEED_URL = "https://code.claude.com/docs/llms.txt"
 const SCOPE_PREFIX = "https://code.claude.com/docs/en/"
+const ADDITIONAL_SCOPE_PREFIXES = [
+  "https://github.com/aws-solutions-library-samples",
+]
 const DEFAULT_CONTENT_DIR = "content"
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
@@ -22,6 +25,18 @@ function normalize(url: string): string | null {
   } catch {
     return null
   }
+}
+
+function toRawGitHubUrl(url: string): string | null {
+  const match = url.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/blob\/(.+)$/)
+  if (!match) return null
+  return `https://raw.githubusercontent.com/${match[1]}/${match[2]}`
+}
+
+function extractCanonical(html: string): string | null {
+  const match = html.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i)
+    ?? html.match(/<link[^>]+href=["']([^"']+)["'][^>]+rel=["']canonical["']/i)
+  return match?.[1] ?? null
 }
 
 export type SaveResult = "new" | "changed" | "unchanged"
@@ -170,12 +185,14 @@ function urlToRelativePath(url: string): string {
 export async function crawl() {
   const seedUrl = process.env["SEED_URL"] ?? SEED_URL
   const scopePrefix = process.env["SCOPE_PREFIX"] ?? SCOPE_PREFIX
+  const scopePrefixes = [scopePrefix, ...ADDITIONAL_SCOPE_PREFIXES]
   const contentDir = process.env["CONTENT_DIR"] ?? DEFAULT_CONTENT_DIR
 
   const queue: string[] = []
   const queued = new Set<string>()
   const fetched = new Set<string>()
-  const attempts = new Map<string, number>()
+  const consecutiveErrors = new Map<string, { count: number, error: string }>()
+  const failed = new Set<string>()
   let consecutive429s = 0
   let aborted = false
 
@@ -196,7 +213,7 @@ export async function crawl() {
   function enqueue(url: string) {
     const normalized = normalize(url)
     if (!normalized) return
-    if (queued.has(normalized) || fetched.has(normalized)) return
+    if (queued.has(normalized) || fetched.has(normalized) || failed.has(normalized)) return
     queue.push(normalized)
     queued.add(normalized)
   }
@@ -218,35 +235,46 @@ export async function crawl() {
     const url = dequeue()
     if (!url) continue
 
-    const attemptCount = (attempts.get(url) ?? 0) + 1
-
-    if (attemptCount > 3) {
-      console.log(`Giving up on ${url} after 3 attempts`)
-      items.set(url, {
-        status: "failed",
-        statusReason: "httpError",
-        fetchedAt: new Date().toISOString(),
-      })
-      continue
-    }
-    attempts.set(url, attemptCount)
-
-    const result = await fetchWithRedirects(url, scopePrefix)
+    const result = await fetchWithRedirects(url, scopePrefixes)
 
     switch (result.type) {
       case "success": {
         consecutive429s = 0
         fetched.add(result.finalUrl)
         queued.delete(result.finalUrl) // handle redirect collision
-        const changeStatus = await saveContent(result.finalUrl, result.body, contentDir)
-        const key = urlToRelativePath(result.finalUrl)
-        items.set(key, {
-          status: "success",
-          statusReason: changeStatus,
-          fetchedAt: new Date().toISOString(),
-        })
-        for (const newUrl of parseUrls(result.body, result.finalUrl, scopePrefix)) {
-          enqueue(newUrl)
+
+        const isHtml = result.contentType.includes("text/html")
+        const isCodeDomain = result.finalUrl.startsWith(scopePrefix)
+
+        if (isHtml && isCodeDomain) {
+          // HTML from code.claude.com: extract canonical to discover the markdown URL
+          const canonical = extractCanonical(result.body)
+          if (canonical && canonical !== result.finalUrl) {
+            enqueue(canonical)
+            if (!canonical.endsWith(".md")) {
+              enqueue(canonical + ".md")
+            }
+          }
+          if (!result.finalUrl.endsWith(".md")) {
+            enqueue(result.finalUrl + ".md")
+          }
+        } else if (isHtml && result.finalUrl.startsWith("https://github.com/")) {
+          // HTML from GitHub: try the raw.githubusercontent.com version if it's a .md file
+          const rawUrl = toRawGitHubUrl(result.finalUrl)
+          if (rawUrl && rawUrl.endsWith(".md")) {
+            enqueue(rawUrl)
+          }
+        } else {
+          const changeStatus = await saveContent(result.finalUrl, result.body, contentDir)
+          const key = urlToRelativePath(result.finalUrl)
+          items.set(key, {
+            status: "success",
+            statusReason: changeStatus,
+            fetchedAt: new Date().toISOString(),
+          })
+          for (const newUrl of parseUrls(result.body, result.finalUrl, scopePrefixes)) {
+            enqueue(newUrl)
+          }
         }
         break
       }
@@ -265,11 +293,37 @@ export async function crawl() {
         break
       }
 
-      case "error":
+      case "error": {
         consecutive429s = 0
-        console.log(`Error fetching ${url}: ${result.reason ?? String(result.status)}`)
-        requeue(url)
+        const errorKey = result.status ? String(result.status) : (result.reason ?? "unknown")
+        console.log(`Error fetching ${url}: ${errorKey}`)
+        if (result.status === 404 || result.status === 406) {
+          failed.add(url)
+          items.set(url, {
+            status: "failed",
+            statusReason: "httpError",
+            fetchedAt: new Date().toISOString(),
+          })
+        } else {
+          const prev = consecutiveErrors.get(url)
+          const entry = (prev && prev.error === errorKey)
+            ? { count: prev.count + 1, error: errorKey }
+            : { count: 1, error: errorKey }
+          consecutiveErrors.set(url, entry)
+          if (entry.count >= 3) {
+            console.log(`Giving up on ${url} after 3 consecutive ${errorKey} errors`)
+            failed.add(url)
+            items.set(url, {
+              status: "failed",
+              statusReason: "httpError",
+              fetchedAt: new Date().toISOString(),
+            })
+          } else {
+            requeue(url)
+          }
+        }
         break
+      }
 
       case "out-of-scope":
         console.log(`Skipped out-of-scope redirect: ${url} → ${result.redirectedTo}`)

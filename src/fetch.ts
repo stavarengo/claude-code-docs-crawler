@@ -1,11 +1,11 @@
 export type FetchResult
-  = | { type: "success", finalUrl: string, body: string }
+  = | { type: "success", finalUrl: string, body: string, contentType: string }
     | { type: "out-of-scope", originalUrl: string, redirectedTo: string }
     | { type: "rate-limited", retryAfter: number | null }
     | { type: "error", reason?: string, status?: number }
     | { type: "non-text", contentType: string, url: string }
 
-export async function fetchWithRedirects(url: string, scopePrefix: string, maxRedirects = 10): Promise<FetchResult> {
+export async function fetchWithRedirects(url: string, scopePrefixes: string[], maxRedirects = 10): Promise<FetchResult> {
   let currentUrl = url
   let redirectCount = 0
 
@@ -25,7 +25,7 @@ export async function fetchWithRedirects(url: string, scopePrefix: string, maxRe
       }
 
       const nextUrl = new URL(location, currentUrl).href
-      if (!nextUrl.startsWith(scopePrefix)) {
+      if (!scopePrefixes.some(prefix => nextUrl.startsWith(prefix))) {
         return { type: "out-of-scope", originalUrl: url, redirectedTo: nextUrl }
       }
 
@@ -55,7 +55,7 @@ export async function fetchWithRedirects(url: string, scopePrefix: string, maxRe
 
     // Success
     const body = await response.text()
-    return { type: "success", finalUrl: currentUrl, body }
+    return { type: "success", finalUrl: currentUrl, body, contentType }
   }
 
   return { type: "error", reason: "Too many redirects" }
