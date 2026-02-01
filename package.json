@@ -1,0 +1,14 @@
+{
+  "name": "claude-code-docs-crawler",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "crawl": "node crawl.js",
+    "typecheck": "tsc --project jsconfig.json",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "@types/node": "^25.1.0",
+    "typescript": "^5.9.3"
+  }
+}
