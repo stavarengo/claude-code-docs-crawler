@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs"
-import { readFile, writeFile, readdir } from "node:fs/promises"
+import { readFile, writeFile, readdir, mkdtemp, rm as rmAsync } from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { execSync } from "node:child_process"
+import { execSync, spawnSync } from "node:child_process"
 import type { UrlResolutionEntry } from "./url-resolution.js"
 
 export interface RewriteStats {
@@ -31,6 +32,19 @@ function getRepoRoot(): string {
 }
 
 const REPO_ROOT = getRepoRoot()
+
+function isGitAvailable(): boolean {
+  try {
+    const result = spawnSync("git", ["--version"], {
+      stdio: ["ignore", "ignore", "ignore"],
+    })
+    return !result.error && result.status === 0
+  } catch {
+    return false
+  }
+}
+
+const GIT_AVAILABLE = isGitAvailable()
 
 function assertWithinRepoRoot(absPath: string, label: string) {
   const normalized = path.resolve(absPath)
@@ -147,9 +161,49 @@ async function walk(dir: string): Promise<string[]> {
   return out
 }
 
+async function maybePrintGitDiff(opts: { absPath: string, updatedContent: string, contentDirAbs: string }) {
+  if (!GIT_AVAILABLE) return
+
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "claude-code-docs-crawler-rewrite-"))
+  try {
+    const relPath = path.relative(opts.contentDirAbs, opts.absPath).split(path.sep).join(path.posix.sep)
+    const afterPath = path.join(tmpDir, path.posix.basename(relPath) || "after.md")
+    await writeFile(afterPath, opts.updatedContent, "utf-8")
+
+    const diff = spawnSync(
+      "git",
+      [
+        "diff",
+        "--no-index",
+        "--color=always",
+        "-U2",
+        "--label",
+        `a/${relPath}`,
+        "--label",
+        `b/${relPath}`,
+        "--",
+        opts.absPath,
+        afterPath,
+      ],
+      {
+      encoding: "utf-8",
+      maxBuffer: 10 * 1024 * 1024,
+      },
+    )
+
+    const stdout = (diff.stdout ?? "").toString()
+    if (stdout.trim().length > 0) {
+      process.stdout.write(stdout.endsWith("\n") ? stdout : `${stdout}\n`)
+    }
+  } finally {
+    await rmAsync(tmpDir, { recursive: true, force: true })
+  }
+}
+
 export async function rewriteMarkdownLinksInContent(
   contentDir: string,
   urlResolution: Record<string, UrlResolutionEntry>,
+  opts?: { showGitDiff?: boolean },
 ): Promise<{ changedSavedPaths: string[], stats: RewriteStats }> {
   const absContentDir = path.resolve(contentDir)
   assertWithinRepoRoot(absContentDir, "contentDir")
@@ -172,6 +226,10 @@ export async function rewriteMarkdownLinksInContent(
     })
 
     if (!changed) continue
+
+    if (opts?.showGitDiff) {
+      await maybePrintGitDiff({ absPath, updatedContent: output, contentDirAbs: absContentDir })
+    }
 
     await writeFile(absPath, output, "utf-8")
     changedSavedPaths.push(relPath)

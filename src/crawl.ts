@@ -228,7 +228,7 @@ function urlToRelativePath(url: string): string {
 
 // Main crawl function — accepts config via environment variables:
 //   SEED_URL, SCOPE_PREFIX, CONTENT_DIR (all fall back to hardcoded defaults)
-export async function crawl() {
+export async function crawl(opts?: { showGitDiff?: boolean }) {
   const seedUrl = process.env["SEED_URL"] ?? SEED_URL
   const scopePrefix = process.env["SCOPE_PREFIX"] ?? SCOPE_PREFIX
   const scopePrefixes = [scopePrefix, ...ADDITIONAL_SCOPE_PREFIXES]
@@ -399,7 +399,7 @@ export async function crawl() {
   markRemovedItems(previousItems, items)
 
   // Rewrite absolute markdown links to local relative paths (when a downloaded local file exists)
-  const rewriteResult = await rewriteMarkdownLinksInContent(contentDir, urlResolution)
+  const rewriteResult = await rewriteMarkdownLinksInContent(contentDir, urlResolution, { showGitDiff: opts?.showGitDiff === true })
   if (rewriteResult.stats.changedFiles > 0) {
     console.log(
       `Rewrote links in ${String(rewriteResult.stats.changedFiles)}/${String(rewriteResult.stats.scannedFiles)} markdown files.`,
@@ -430,5 +430,8 @@ export async function crawl() {
 // Only run crawl when executed directly as a script (not when imported)
 const __filename = fileURLToPath(import.meta.url)
 if (process.argv[1] && (process.argv[1] === __filename || process.argv[1].endsWith("src/crawl.ts"))) {
-  crawl()
+  const showGitDiff = process.argv.includes("--show-diff")
+    || process.argv.includes("--diff")
+    || process.argv.includes("--show-git-diff")
+  crawl({ showGitDiff })
 }
