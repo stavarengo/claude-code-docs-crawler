@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url"
 import path from "node:path"
 import { fetchWithRedirects } from "./fetch.js"
 import { parseUrls } from "./parse.js"
+import { rewriteMarkdownLinksInContent } from "./rewrite-links.js"
+import type { UrlResolutionEntry } from "./url-resolution.js"
 
 const mkdirAsync = promisify(mkdir)
 const writeFileAsync = promisify(writeFile)
@@ -13,7 +15,7 @@ const SCOPE_PREFIX = "https://code.claude.com/docs/en/"
 const ADDITIONAL_SCOPE_PREFIXES = [
   "https://github.com/aws-solutions-library-samples",
 ]
-const DEFAULT_CONTENT_DIR = "content"
+const DEFAULT_CONTENT_DIR = path.resolve("content")
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
@@ -78,6 +80,7 @@ export interface BuildMetadataInput {
   seedUrl: string
   scopePrefix: string
   items: Map<string, ItemRecord>
+  urlResolution?: Record<string, UrlResolutionEntry>
   aborted: boolean
 }
 
@@ -88,9 +91,10 @@ export interface CrawlMetadata {
   result: "success" | "partial" | "aborted"
   stats: Record<string, number>
   items: Record<string, ItemRecord>
+  urlResolution: Record<string, UrlResolutionEntry>
 }
 
-export function buildMetadata({ seedUrl, scopePrefix, items, aborted }: BuildMetadataInput): CrawlMetadata {
+export function buildMetadata({ seedUrl, scopePrefix, items, urlResolution, aborted }: BuildMetadataInput): CrawlMetadata {
   // Determine result
   let result: "success" | "partial" | "aborted"
   if (aborted) {
@@ -153,6 +157,7 @@ export function buildMetadata({ seedUrl, scopePrefix, items, aborted }: BuildMet
     result,
     stats,
     items: itemsObj,
+    urlResolution: urlResolution ?? {},
   }
 }
 
@@ -197,6 +202,7 @@ export async function crawl() {
   let aborted = false
 
   const items = new Map<string, ItemRecord>()
+  const urlResolution: Record<string, UrlResolutionEntry> = {}
 
   // Load prior crawl metadata if it exists
   const metadataPath = path.join(contentDir, "crawl-metadata.json")
@@ -262,11 +268,17 @@ export async function crawl() {
           // HTML from GitHub: try the raw.githubusercontent.com version if it's a .md file
           const rawUrl = toRawGitHubUrl(result.finalUrl)
           if (rawUrl && rawUrl.endsWith(".md")) {
+            const rawSavedPath = urlToRelativePath(rawUrl)
+            urlResolution[url] = { finalUrl: rawUrl, savedPath: rawSavedPath }
+            urlResolution[result.finalUrl] = { finalUrl: rawUrl, savedPath: rawSavedPath }
+            urlResolution[rawUrl] = { finalUrl: rawUrl, savedPath: rawSavedPath }
             enqueue(rawUrl)
           }
         } else {
           const changeStatus = await saveContent(result.finalUrl, result.body, contentDir)
           const key = urlToRelativePath(result.finalUrl)
+          urlResolution[url] = { finalUrl: result.finalUrl, savedPath: key }
+          urlResolution[result.finalUrl] = { finalUrl: result.finalUrl, savedPath: key }
           items.set(key, {
             status: "success",
             statusReason: changeStatus,
@@ -345,11 +357,26 @@ export async function crawl() {
   // Mark pages from prior run that were not visited in this run
   markRemovedItems(previousItems, items)
 
+  // Rewrite absolute markdown links to local relative paths (when a downloaded local file exists)
+  const rewriteResult = await rewriteMarkdownLinksInContent(contentDir, urlResolution)
+  if (rewriteResult.stats.changedFiles > 0) {
+    console.log(
+      `Rewrote links in ${String(rewriteResult.stats.changedFiles)}/${String(rewriteResult.stats.scannedFiles)} markdown files.`,
+    )
+    for (const savedPath of rewriteResult.changedSavedPaths) {
+      const item = items.get(savedPath)
+      if (item && item.status === "success" && item.statusReason === "unchanged") {
+        item.statusReason = "changed"
+      }
+    }
+  }
+
   // Write crawl metadata
   const metadata = buildMetadata({
     seedUrl,
     scopePrefix,
     items,
+    urlResolution,
     aborted,
   })
 
