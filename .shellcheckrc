@@ -1,0 +1,23 @@
+# See: https://github.com/koalaman/shellcheck/wiki/Directive
+
+# Look for 'source'd files relative to the checked script,
+# and also look for absolute paths in /mnt/chroot
+#source-path=SCRIPTDIR
+#source-path=/mnt/chroot
+
+# Allow opening any 'source'd file, even if not specified as input
+#external-sources=true
+
+# Turn on warnings for unquoted variables with safe values
+enable=quote-safe-variables
+
+# Turn on warnings for unassigned uppercase variables
+enable=check-unassigned-uppercase
+
+# Disable specific rules
+disable=SC1091 # Not following: (error message here): https://www.shellcheck.net/wiki/SC1091
+
+enable=check-extra-masked-returns
+
+extended-analysis=true
+extended=all

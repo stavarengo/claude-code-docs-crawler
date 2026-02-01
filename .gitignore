@@ -1,3 +1,4 @@
 .vscode/
 content/
 node_modules/
+.husky/
