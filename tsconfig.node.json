@@ -1,0 +1,64 @@
+{
+  "$schema": "https://www.schemastore.org/tsconfig.json",
+  "compilerOptions": {
+    "composite": true,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
+    "lib": [
+      "ES2024",
+      "ES2024.ArrayBuffer",
+      "ES2024.Collection",
+      "ES2024.Object",
+      "ES2024.Promise",
+      "ES2024.Regexp",
+      "ES2024.SharedMemory",
+      "ES2024.String",
+      "DOM"
+    ],
+    "types": [
+      "node"
+    ],
+    "target": "ES2024",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "allowJs": true,
+    // noEmit: true - Skip code generation. TypeScript is used for type checking only.
+    // Vite handles the actual build and bundling, not tsc.
+    // To build, run: `npm run build`
+    "noEmit": true,
+    // === Interop ===
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "allowImportingTsExtensions": true,
+    // === Strict Type Checking ===
+    "strict": true,
+    "strictNullChecks": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUncheckedIndexedAccess": true,
+    "useUnknownInCatchVariables": true,
+    "exactOptionalPropertyTypes": true,
+    // === Class Features ===
+    "experimentalDecorators": true,
+    "useDefineForClassFields": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "pwa-assets.config.ts",
+    "vite.config.ts",
+    "vitest.config.ts",
+    "react-router.config.ts",
+    "eslint.config.ts",
+    "postcss.config.js",
+    "tailwind.config.js",
+    "playwright.config.ts",
+    "scripts/**/*.ts"
+  ]
+}
