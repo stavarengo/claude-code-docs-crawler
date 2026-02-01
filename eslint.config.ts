@@ -1,4 +1,5 @@
 import { includeIgnoreFile } from "@eslint/compat"
+import type { Plugin } from "@eslint/core"
 import eslint from "@eslint/js"
 import json from "@eslint/json"
 import markdown from "@eslint/markdown"
@@ -30,7 +31,7 @@ export default defineConfig([
     files: ["**/*.{ts,tsx,js}"],
     languageOptions: {
       parserOptions: {
-        projectService: true,
+        project: ["tsconfig.node.json"],
         tsconfigRootDir: import.meta.dirname,
       },
     },
@@ -88,21 +89,11 @@ export default defineConfig([
     },
   },
   {
-    name: "React JSX (JavaScript XML) Specific Linting Rules",
-    settings: {
-      react: { version: "detect" },
-    },
-    files: ["**/*.{tsx}"],
-    plugins: {
-      pluginReact,
-    },
-    extends: [pluginReact.configs.flat["recommended"]!, pluginReact.configs.flat["jsx-runtime"]!],
-  },
-  {
     name: "JSON Files",
     files: ["**/*.json"],
     ignores: ["package-lock.json", ...forceJsonAsJsoncFiles],
-    plugins: { json },
+    // @eslint/json types are incompatible with exactOptionalPropertyTypes
+    plugins: { json: json as unknown as Plugin },
     language: "json/json",
     extends: ["json/recommended"],
     rules: {
@@ -113,7 +104,8 @@ export default defineConfig([
   {
     name: "JSONC Files",
     files: ["**/*.jsonc", ...forceJsonAsJsoncFiles],
-    plugins: { json },
+    // @eslint/json types are incompatible with exactOptionalPropertyTypes
+    plugins: { json: json as unknown as Plugin },
     language: "json/jsonc",
     extends: ["json/recommended"],
   },
@@ -121,7 +113,8 @@ export default defineConfig([
   {
     name: "JSON5 Files",
     files: ["**/*.json5"],
-    plugins: { json },
+    // @eslint/json types are incompatible with exactOptionalPropertyTypes
+    plugins: { json: json as unknown as Plugin },
     language: "json/json5",
     extends: ["json/recommended"],
   },
