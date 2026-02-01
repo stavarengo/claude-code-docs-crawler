@@ -2,6 +2,7 @@ import { mkdir, writeFile, readFileSync, existsSync } from "node:fs"
 import { promisify } from "node:util"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
+import { execSync } from "node:child_process"
 import { fetchWithRedirects } from "./fetch.js"
 import { parseUrls } from "./parse.js"
 import { rewriteMarkdownLinksInContent } from "./rewrite-links.js"
@@ -15,9 +16,48 @@ const SCOPE_PREFIX = "https://code.claude.com/docs/en/"
 const ADDITIONAL_SCOPE_PREFIXES = [
   "https://github.com/aws-solutions-library-samples",
 ]
-const DEFAULT_CONTENT_DIR = path.resolve("content")
+
+function getRepoRoot(): string {
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url))
+  try {
+    const topLevel = execSync("git rev-parse --show-toplevel", {
+      cwd: moduleDir,
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString("utf-8")
+      .trim()
+
+    if (topLevel) {
+      return path.resolve(topLevel)
+    }
+  } catch {
+    // fall back
+  }
+
+  return path.resolve(moduleDir, "..")
+}
+
+const REPO_ROOT = getRepoRoot()
+const DEFAULT_CONTENT_DIR = path.join(REPO_ROOT, "content")
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+
+function assertWithinRepoRoot(absPath: string, label: string) {
+  const normalized = path.resolve(absPath)
+  const rootWithSep = REPO_ROOT.endsWith(path.sep) ? REPO_ROOT : `${REPO_ROOT}${path.sep}`
+  if (!normalized.startsWith(rootWithSep)) {
+    throw new Error(`${label} must be within repo root: ${REPO_ROOT}`)
+  }
+}
+
+function resolveContentDir(contentDir: string): string {
+  const abs = path.isAbsolute(contentDir)
+    ? path.resolve(contentDir)
+    : path.resolve(REPO_ROOT, contentDir)
+
+  assertWithinRepoRoot(abs, "CONTENT_DIR")
+  return abs
+}
 
 function normalize(url: string): string | null {
   try {
@@ -44,8 +84,9 @@ function extractCanonical(html: string): string | null {
 export type SaveResult = "new" | "changed" | "unchanged"
 
 export async function saveContent(url: string, body: string, contentDir: string = DEFAULT_CONTENT_DIR): Promise<SaveResult> {
+  const resolvedContentDir = resolveContentDir(contentDir)
   const parsed = new URL(url)
-  let filePath = path.join(contentDir, parsed.host, parsed.pathname)
+  let filePath = path.join(resolvedContentDir, parsed.host, parsed.pathname)
 
   // Handle directory-style URLs
   if (filePath.endsWith("/") || !path.extname(filePath)) {
@@ -191,7 +232,7 @@ export async function crawl() {
   const seedUrl = process.env["SEED_URL"] ?? SEED_URL
   const scopePrefix = process.env["SCOPE_PREFIX"] ?? SCOPE_PREFIX
   const scopePrefixes = [scopePrefix, ...ADDITIONAL_SCOPE_PREFIXES]
-  const contentDir = process.env["CONTENT_DIR"] ?? DEFAULT_CONTENT_DIR
+  const contentDir = resolveContentDir(process.env["CONTENT_DIR"] ?? DEFAULT_CONTENT_DIR)
 
   const queue: string[] = []
   const queued = new Set<string>()

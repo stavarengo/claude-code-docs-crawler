@@ -1,11 +1,43 @@
 import { existsSync } from "node:fs"
 import { readFile, writeFile, readdir } from "node:fs/promises"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
+import { execSync } from "node:child_process"
 import type { UrlResolutionEntry } from "./url-resolution.js"
 
 export interface RewriteStats {
   scannedFiles: number
   changedFiles: number
+}
+
+function getRepoRoot(): string {
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url))
+  try {
+    const topLevel = execSync("git rev-parse --show-toplevel", {
+      cwd: moduleDir,
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString("utf-8")
+      .trim()
+
+    if (topLevel) {
+      return path.resolve(topLevel)
+    }
+  } catch {
+    // fall back
+  }
+
+  return path.resolve(moduleDir, "..")
+}
+
+const REPO_ROOT = getRepoRoot()
+
+function assertWithinRepoRoot(absPath: string, label: string) {
+  const normalized = path.resolve(absPath)
+  const rootWithSep = REPO_ROOT.endsWith(path.sep) ? REPO_ROOT : `${REPO_ROOT}${path.sep}`
+  if (!normalized.startsWith(rootWithSep)) {
+    throw new Error(`${label} must be within repo root: ${REPO_ROOT}`)
+  }
 }
 
 function splitUrlAndFragment(rawUrl: string): { url: string, fragment: string } {
@@ -120,6 +152,7 @@ export async function rewriteMarkdownLinksInContent(
   urlResolution: Record<string, UrlResolutionEntry>,
 ): Promise<{ changedSavedPaths: string[], stats: RewriteStats }> {
   const absContentDir = path.resolve(contentDir)
+  assertWithinRepoRoot(absContentDir, "contentDir")
   const allFiles = await walk(absContentDir)
 
   const changedSavedPaths: string[] = []
