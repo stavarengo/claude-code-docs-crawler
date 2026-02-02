@@ -2,6 +2,8 @@
 
 Crawls documentation from [code.claude.com](https://code.claude.com) and related GitHub repositories, saves it locally as markdown, and produces a compact index for agent navigation following [Vercel's index style](https://vercel.com/blog/agents-md-outperforms-skills-in-our-agent-evals). Links between pages are rewritten to relative paths so the local copy works without network access.
 
+If you just need the already-crawled docs without running the crawler yourself, grab them directly from [stavarengo/claude-code-docs](https://github.com/stavarengo/claude-code-docs).
+
 ## How it works
 
 The pipeline has three steps, each a standalone script:
