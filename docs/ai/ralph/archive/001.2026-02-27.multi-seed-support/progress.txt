@@ -1,0 +1,74 @@
+# PRD: Multi-Seed Crawler Support
+
+Base commit: a10caf05dab97ecc50bf550c6b008f2d499d84b9
+Final commit: e1db43b
+
+## Codebase Patterns
+
+- Typecheck uses `tsconfig.node.json` (not `tsconfig.json`). The `npm run typecheck` script references the wrong filename and fails; use `npx tsc --project tsconfig.node.json` directly.
+- Tests use Node's built-in test runner: `node --import tsx --test test/*.test.ts`
+- `npm run lint:js` has pre-existing errors in `AGENTS.md` and `src/rewrite-links.ts`. Use `npx eslint <specific-file>` to check only your files.
+- The codebase uses `eslint --fix` for auto-fixable issues. Non-auto-fixable ones need manual optional-chaining rewrites.
+- Exports from `src/crawl.ts` are tested via `test/crawl-metadata.test.ts` (unit) and `test/crawl.test.ts` (integration).
+- The linter requires commas (not semicolons) as member delimiters in inline type literals: `{ a?: boolean, b?: string }` not `{ a?: boolean; b?: string }`.
+- The linter forbids `Array<T>` syntax -- use `T[]` instead (`@typescript-eslint/array-type` rule).
+
+## 2026-02-27 - US-001
+
+- Defined `SeedConfig` interface and exported `SEEDS: SeedConfig[]` array from `src/crawl.ts`
+- Kept backward-compatible derived constants (`SEED_URL`, `SCOPE_PREFIX`, `ADDITIONAL_SCOPE_PREFIXES`) from `SEEDS[0]` so existing `crawl()` logic and tests continue to work
+- Added 4 tests in `test/crawl-metadata.test.ts` verifying the SEEDS array shape and seed values
+- Fixed pre-existing lint errors in `src/crawl.ts` (RegExp#exec, optional chaining)
+- Files changed: `src/crawl.ts`, `test/crawl-metadata.test.ts`, `docs/ai/ralph/current/prd.md`, `docs/ai/ralph/current/progress.txt`
+- **Learnings for future iterations:**
+
+  - The legacy constants (`SEED_URL`, `SCOPE_PREFIX`, `ADDITIONAL_SCOPE_PREFIXES`) are derived from `SEEDS[0]` and still used by `crawl()`. US-002 should replace them with the multi-seed loop.
+  - `toRawGitHubUrl` returns `string | null` -- the linter requires optional chaining (`rawUrl?.endsWith(...)`) rather than `rawUrl && rawUrl.endsWith(...)`.
+
+---
+
+## 2026-02-27 - US-002
+
+- Updated `crawl()` to support multiple seeds: env var override (single seed) > `opts.seeds` parameter > `SEEDS` constant
+- Derived `scopePrefixes` from all seeds via `flatMap` and `primaryScopePrefixes` via `map`
+- All seed URLs are enqueued at startup with a `for...of` loop
+- Renamed `isCodeDomain` to `isDocsDomain`, now checks against all primary scope prefixes using `.some()`
+- Removed legacy constants (`SEED_URL`, `SCOPE_PREFIX`, `ADDITIONAL_SCOPE_PREFIXES`) -- no longer needed
+- Added `seeds` optional parameter to `crawl()` for testability
+- Added multi-seed integration test in `test/crawl.test.ts` that verifies pages from two seeds are crawled
+- The `buildMetadata` call temporarily uses `seeds[0]` for backward compat (US-003 will change the interface)
+- Files changed: `src/crawl.ts`, `test/crawl.test.ts`, `docs/ai/ralph/current/prd.md`, `docs/ai/ralph/current/progress.txt`
+- **Learnings for future iterations:**
+
+  - `crawl()` now accepts `opts.seeds` for testing multi-seed behavior without hitting production URLs. When `SEED_URL` env var is set, it takes priority over `opts.seeds`.
+  - The `buildMetadata` call still passes `seedUrl`/`scopePrefix` from `seeds[0]` -- US-003 will change the interface to accept the full `seeds` array.
+
+---
+
+## 2026-02-27 - US-003
+
+- Replaced `seedUrl: string` and `scopePrefix: string` with `seeds: SeedConfig[]` in `BuildMetadataInput` and `CrawlMetadata` interfaces
+- Updated `buildMetadata()` to destructure `seeds` and return it in the output object
+- Updated `crawl()` call site to pass the full `seeds` array instead of `seeds[0]` fields
+- Added new test in `test/crawl-metadata.test.ts` verifying the new metadata shape (seeds array present, seedUrl/scopePrefix absent)
+- Updated all existing `buildMetadata` calls in tests to use `seeds: [...]` argument and `metadata.seeds[0]!` assertions (required for typecheck to pass)
+- Updated integration test metadata type cast in `test/crawl.test.ts`
+- Files changed: `src/crawl.ts`, `test/crawl-metadata.test.ts`, `test/crawl.test.ts`, `docs/ai/ralph/current/prd.md`, `docs/ai/ralph/current/progress.txt`
+- **Learnings for future iterations:**
+
+  - The linter forbids `Array<T>` syntax in type annotations -- use `T[]` instead (`@typescript-eslint/array-type` rule).
+  - US-003 and US-004 have a circular dependency: changing the types requires updating tests for typecheck to pass. Both were effectively completed together since the tsconfig includes `test/**/*.ts`.
+
+---
+
+## 2026-02-27 - US-004
+
+- All acceptance criteria were already satisfied by US-003 (which had to update test files for typecheck to pass)
+- Verified: all 54 tests pass, typecheck passes, lint passes
+- No code changes needed -- only marked the story as done
+- Files changed: `docs/ai/ralph/current/prd.md`, `docs/ai/ralph/current/progress.txt`
+- **Learnings for future iterations:**
+
+  - When types and tests are in the same tsconfig scope, changing interfaces forces test updates in the same commit. Stories that split "change types" and "update tests" will be completed together in practice.
+
+---

@@ -11,10 +11,23 @@ import type { UrlResolutionEntry } from "./url-resolution.js"
 const mkdirAsync = promisify(mkdir)
 const writeFileAsync = promisify(writeFile)
 
-const SEED_URL = "https://code.claude.com/docs/llms.txt"
-const SCOPE_PREFIX = "https://code.claude.com/docs/en/"
-const ADDITIONAL_SCOPE_PREFIXES = [
-  "https://github.com/aws-solutions-library-samples",
+export interface SeedConfig {
+  seedUrl: string
+  scopePrefix: string
+  additionalScopePrefixes: string[]
+}
+
+export const SEEDS: SeedConfig[] = [
+  {
+    seedUrl: "https://code.claude.com/docs/llms.txt",
+    scopePrefix: "https://code.claude.com/docs/en/",
+    additionalScopePrefixes: ["https://github.com/aws-solutions-library-samples"],
+  },
+  {
+    seedUrl: "https://platform.claude.com/llms.txt",
+    scopePrefix: "https://platform.claude.com/docs/en",
+    additionalScopePrefixes: [],
+  },
 ]
 
 function getRepoRoot(): string {
@@ -71,14 +84,14 @@ function normalize(url: string): string | null {
 }
 
 function toRawGitHubUrl(url: string): string | null {
-  const match = url.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/blob\/(.+)$/)
+  const match = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/blob\/(.+)$/.exec(url)
   if (!match) return null
   return `https://raw.githubusercontent.com/${match[1]}/${match[2]}`
 }
 
 function extractCanonical(html: string): string | null {
-  const match = html.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i)
-    ?? html.match(/<link[^>]+href=["']([^"']+)["'][^>]+rel=["']canonical["']/i)
+  const match = (/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i.exec(html))
+    ?? (/<link[^>]+href=["']([^"']+)["'][^>]+rel=["']canonical["']/i.exec(html))
   return match?.[1] ?? null
 }
 
@@ -119,16 +132,14 @@ export interface ItemRecord {
 }
 
 export interface BuildMetadataInput {
-  seedUrl: string
-  scopePrefix: string
+  seeds: SeedConfig[]
   items: Map<string, ItemRecord>
   urlResolution?: Record<string, UrlResolutionEntry>
   aborted: boolean
 }
 
 export interface CrawlMetadata {
-  seedUrl: string
-  scopePrefix: string
+  seeds: SeedConfig[]
   lastUpdate: string
   result: "success" | "partial" | "aborted"
   stats: Record<string, number>
@@ -136,7 +147,7 @@ export interface CrawlMetadata {
   urlResolution: Record<string, UrlResolutionEntry>
 }
 
-export function buildMetadata({ seedUrl, scopePrefix, items, urlResolution, aborted }: BuildMetadataInput): CrawlMetadata {
+export function buildMetadata({ seeds, items, urlResolution, aborted }: BuildMetadataInput): CrawlMetadata {
   // Determine result
   let result: "success" | "partial" | "aborted"
   if (aborted) {
@@ -193,8 +204,7 @@ export function buildMetadata({ seedUrl, scopePrefix, items, urlResolution, abor
   }
 
   return {
-    seedUrl,
-    scopePrefix,
+    seeds,
     lastUpdate: new Date().toISOString(),
     result,
     stats,
@@ -229,10 +239,21 @@ function urlToRelativePath(url: string): string {
 
 // Main crawl function — accepts config via environment variables:
 //   SEED_URL, SCOPE_PREFIX, CONTENT_DIR (all fall back to hardcoded defaults)
-export async function crawl(opts?: { showGitDiff?: boolean }) {
-  const seedUrl = process.env["SEED_URL"] ?? SEED_URL
-  const scopePrefix = process.env["SCOPE_PREFIX"] ?? SCOPE_PREFIX
-  const scopePrefixes = [scopePrefix, ...ADDITIONAL_SCOPE_PREFIXES]
+export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[] }) {
+  // Determine seeds: env var override (single seed) > opts.seeds > SEEDS constant
+  let seeds: SeedConfig[]
+  if (process.env["SEED_URL"]) {
+    seeds = [{
+      seedUrl: process.env["SEED_URL"],
+      scopePrefix: process.env["SCOPE_PREFIX"] ?? process.env["SEED_URL"],
+      additionalScopePrefixes: [],
+    }]
+  } else {
+    seeds = opts?.seeds ?? SEEDS
+  }
+
+  const scopePrefixes = seeds.flatMap(s => [s.scopePrefix, ...s.additionalScopePrefixes])
+  const primaryScopePrefixes = seeds.map(s => s.scopePrefix)
   const contentDir = resolveContentDir(process.env["CONTENT_DIR"] ?? DEFAULT_CONTENT_DIR)
   const downloadsDir = path.join(contentDir, DOWNLOADS_SUBDIR)
 
@@ -278,7 +299,9 @@ export async function crawl(opts?: { showGitDiff?: boolean }) {
     queued.add(url)
   }
 
-  enqueue(seedUrl)
+  for (const seed of seeds) {
+    enqueue(seed.seedUrl)
+  }
 
   while (queue.length > 0) {
     const url = dequeue()
@@ -293,9 +316,9 @@ export async function crawl(opts?: { showGitDiff?: boolean }) {
         queued.delete(result.finalUrl) // handle redirect collision
 
         const isHtml = result.contentType.includes("text/html")
-        const isCodeDomain = result.finalUrl.startsWith(scopePrefix)
+        const isDocsDomain = primaryScopePrefixes.some(prefix => result.finalUrl.startsWith(prefix))
 
-        if (isHtml && isCodeDomain) {
+        if (isHtml && isDocsDomain) {
           // HTML from code.claude.com: extract canonical to discover the markdown URL
           const canonical = extractCanonical(result.body)
           if (canonical && canonical !== result.finalUrl) {
@@ -310,7 +333,7 @@ export async function crawl(opts?: { showGitDiff?: boolean }) {
         } else if (isHtml && result.finalUrl.startsWith("https://github.com/")) {
           // HTML from GitHub: try the raw.githubusercontent.com version if it's a .md file
           const rawUrl = toRawGitHubUrl(result.finalUrl)
-          if (rawUrl && rawUrl.endsWith(".md")) {
+          if (rawUrl?.endsWith(".md")) {
             const rawSavedPath = urlToRelativePath(rawUrl)
             urlResolution[url] = { finalUrl: rawUrl, savedPath: rawSavedPath }
             urlResolution[result.finalUrl] = { finalUrl: rawUrl, savedPath: rawSavedPath }
@@ -361,7 +384,7 @@ export async function crawl(opts?: { showGitDiff?: boolean }) {
           })
         } else {
           const prev = consecutiveErrors.get(url)
-          const entry = (prev && prev.error === errorKey)
+          const entry = (prev?.error === errorKey)
             ? { count: prev.count + 1, error: errorKey }
             : { count: 1, error: errorKey }
           consecutiveErrors.set(url, entry)
@@ -408,7 +431,7 @@ export async function crawl(opts?: { showGitDiff?: boolean }) {
     )
     for (const savedPath of rewriteResult.changedSavedPaths) {
       const item = items.get(savedPath)
-      if (item && item.status === "success" && item.statusReason === "unchanged") {
+      if (item?.status === "success" && item.statusReason === "unchanged") {
         item.statusReason = "changed"
       }
     }
@@ -416,8 +439,7 @@ export async function crawl(opts?: { showGitDiff?: boolean }) {
 
   // Write crawl metadata
   const metadata = buildMetadata({
-    seedUrl,
-    scopePrefix,
+    seeds,
     items,
     urlResolution,
     aborted,

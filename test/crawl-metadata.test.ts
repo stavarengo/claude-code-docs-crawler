@@ -8,7 +8,7 @@ const mkdirAsync = promisify(mkdir)
 
 // We import the saveContent helper and buildMetadata from crawl.ts
 // These will be exported once implemented.
-import { saveContent, buildMetadata, markRemovedItems } from "../src/crawl.ts"
+import { saveContent, buildMetadata, markRemovedItems, type SeedConfig, SEEDS } from "../src/crawl.ts"
 
 const TEST_CONTENT_DIR = path.resolve("tmp/test-crawl-metadata")
 
@@ -71,14 +71,13 @@ describe("US-004: buildMetadata", () => {
     ])
 
     const metadata = buildMetadata({
-      seedUrl: "http://example.com/docs/",
-      scopePrefix: "http://example.com/docs/",
+      seeds: [{ seedUrl: "http://example.com/docs/", scopePrefix: "http://example.com/docs/", additionalScopePrefixes: [] }],
       items,
       aborted: false,
     })
 
-    assert.strictEqual(metadata.seedUrl, "http://example.com/docs/")
-    assert.strictEqual(metadata.scopePrefix, "http://example.com/docs/")
+    assert.strictEqual(metadata.seeds[0]!.seedUrl, "http://example.com/docs/")
+    assert.strictEqual(metadata.seeds[0]!.scopePrefix, "http://example.com/docs/")
     assert.strictEqual(metadata.result, "success")
     assert.ok(/^\d{4}-\d{2}-\d{2}T/.exec(metadata.lastUpdate))
     assert.strictEqual(metadata.stats["uniqueUrls"], 2)
@@ -98,8 +97,7 @@ describe("US-004: buildMetadata", () => {
     ])
 
     const metadata = buildMetadata({
-      seedUrl: "http://example.com/docs/",
-      scopePrefix: "http://example.com/docs/",
+      seeds: [{ seedUrl: "http://example.com/docs/", scopePrefix: "http://example.com/docs/", additionalScopePrefixes: [] }],
       items,
       aborted: false,
     })
@@ -113,8 +111,7 @@ describe("US-004: buildMetadata", () => {
     const items = new Map<string, { status: string, statusReason: string, fetchedAt: string }>()
 
     const metadata = buildMetadata({
-      seedUrl: "http://example.com/docs/",
-      scopePrefix: "http://example.com/docs/",
+      seeds: [{ seedUrl: "http://example.com/docs/", scopePrefix: "http://example.com/docs/", additionalScopePrefixes: [] }],
       items,
       aborted: true,
     })
@@ -131,8 +128,7 @@ describe("US-004: buildMetadata", () => {
     ])
 
     const metadata = buildMetadata({
-      seedUrl: "http://example.com/docs/",
-      scopePrefix: "http://example.com/docs/",
+      seeds: [{ seedUrl: "http://example.com/docs/", scopePrefix: "http://example.com/docs/", additionalScopePrefixes: [] }],
       items,
       aborted: false,
     })
@@ -234,8 +230,7 @@ describe("US-005: buildMetadata counts removed items in stats", () => {
     ])
 
     const metadata = buildMetadata({
-      seedUrl: "http://example.com/docs/",
-      scopePrefix: "http://example.com/docs/",
+      seeds: [{ seedUrl: "http://example.com/docs/", scopePrefix: "http://example.com/docs/", additionalScopePrefixes: [] }],
       items,
       aborted: false,
     })
@@ -244,5 +239,68 @@ describe("US-005: buildMetadata counts removed items in stats", () => {
     assert.strictEqual(metadata.stats["success"], 3)
     assert.strictEqual(metadata.stats["success.removed"], 2)
     assert.strictEqual(metadata.stats["success.new"], 1)
+  })
+})
+
+describe("US-003: buildMetadata uses seeds array", () => {
+  it("returns seeds array instead of seedUrl/scopePrefix", () => {
+    const seeds: SeedConfig[] = [
+      { seedUrl: "http://example.com/docs/", scopePrefix: "http://example.com/docs/", additionalScopePrefixes: [] },
+      { seedUrl: "http://other.com/docs/", scopePrefix: "http://other.com/docs/", additionalScopePrefixes: ["http://extra.com/"] },
+    ]
+    const items = new Map<string, { status: string, statusReason: string, fetchedAt: string }>([
+      ["example.com/docs/page1/index.txt", { status: "success", statusReason: "new", fetchedAt: "2026-02-01T00:00:00.000Z" }],
+    ])
+
+    const metadata = buildMetadata({
+      seeds,
+      items,
+      aborted: false,
+    })
+
+    // Should have seeds array
+    assert.ok(Array.isArray(metadata.seeds), "metadata.seeds should be an array")
+    assert.strictEqual(metadata.seeds.length, 2)
+    assert.strictEqual(metadata.seeds[0]!.seedUrl, "http://example.com/docs/")
+    assert.strictEqual(metadata.seeds[1]!.scopePrefix, "http://other.com/docs/")
+
+    // Should NOT have seedUrl/scopePrefix at top level
+    assert.strictEqual("seedUrl" in metadata, false, "metadata should not have seedUrl")
+    assert.strictEqual("scopePrefix" in metadata, false, "metadata should not have scopePrefix")
+
+    // Other fields still present
+    assert.strictEqual(metadata.result, "success")
+    assert.ok(metadata.lastUpdate)
+    assert.ok(metadata.stats)
+    assert.ok(metadata.items)
+  })
+})
+
+describe("US-001: SeedConfig type and SEEDS array", () => {
+  it("exports SEEDS as an array with at least two seed configs", () => {
+    assert.ok(Array.isArray(SEEDS), "SEEDS should be an array")
+    assert.ok(SEEDS.length >= 2, "SEEDS should have at least two entries")
+  })
+
+  it("each seed has the correct SeedConfig shape", () => {
+    for (const seed of SEEDS) {
+      assert.strictEqual(typeof seed.seedUrl, "string", "seedUrl should be a string")
+      assert.strictEqual(typeof seed.scopePrefix, "string", "scopePrefix should be a string")
+      assert.ok(Array.isArray(seed.additionalScopePrefixes), "additionalScopePrefixes should be an array")
+    }
+  })
+
+  it("contains the code.claude.com seed", () => {
+    const codeSeed = SEEDS.find((s: SeedConfig) => s.seedUrl === "https://code.claude.com/docs/llms.txt")
+    assert.ok(codeSeed, "code.claude.com seed should exist")
+    assert.strictEqual(codeSeed.scopePrefix, "https://code.claude.com/docs/en/")
+    assert.deepStrictEqual(codeSeed.additionalScopePrefixes, ["https://github.com/aws-solutions-library-samples"])
+  })
+
+  it("contains the platform.claude.com seed", () => {
+    const platformSeed = SEEDS.find((s: SeedConfig) => s.seedUrl === "https://platform.claude.com/llms.txt")
+    assert.ok(platformSeed, "platform.claude.com seed should exist")
+    assert.strictEqual(platformSeed.scopePrefix, "https://platform.claude.com/docs/en")
+    assert.deepStrictEqual(platformSeed.additionalScopePrefixes, [])
   })
 })

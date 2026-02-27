@@ -5,7 +5,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs"
 import path from "node:path"
 
 // Import crawl — it must be exported and accept config via env vars
-import { crawl } from "../src/crawl.ts"
+import { crawl, type SeedConfig } from "../src/crawl.ts"
 
 const TEST_CONTENT_DIR = path.resolve("tmp/test-crawl-integration")
 
@@ -122,16 +122,15 @@ describe("US-006: Integration test for full crawl pipeline", () => {
     assert.ok(existsSync(metadataPath), "crawl-metadata.json exists")
 
     const metadata = JSON.parse(readFileSync(metadataPath, "utf-8")) as {
-      seedUrl: string
-      scopePrefix: string
+      seeds: { seedUrl: string, scopePrefix: string, additionalScopePrefixes: string[] }[]
       lastUpdate: string
       result: string
       stats: Record<string, number>
       items: Record<string, { status: string, statusReason: string, fetchedAt: string }>
     }
 
-    assert.strictEqual(metadata.seedUrl, seedUrl)
-    assert.strictEqual(metadata.scopePrefix, scopePrefix)
+    assert.strictEqual(metadata.seeds[0]!.seedUrl, seedUrl)
+    assert.strictEqual(metadata.seeds[0]!.scopePrefix, scopePrefix)
     assert.strictEqual(metadata.result, "success")
     assert.ok(/^\d{4}-\d{2}-\d{2}T/.exec(metadata.lastUpdate), "lastUpdate is ISO 8601")
 
@@ -163,5 +162,56 @@ describe("US-006: Integration test for full crawl pipeline", () => {
     assert.strictEqual(metadata.stats["success.new"], 3)
     assert.strictEqual(metadata.stats["success.unchanged"], 1)
     assert.strictEqual(metadata.stats["failed"], 0)
+  })
+})
+
+describe("US-002: Multi-seed crawl", () => {
+  it("enqueues and crawls pages from multiple seeds", async () => {
+    // Add a second seed path to the mock server
+    pages["/other/"] = [
+      "# Other Docs Home",
+      `[Other Page](/other/page-x)`,
+    ].join("\n")
+    pages["/other/page-x"] = "# Other Page X\n\nContent from second seed."
+
+    // Build seeds array with two seeds pointing to different paths on the mock server
+    const seeds: SeedConfig[] = [
+      {
+        seedUrl: `${baseUrl}/docs/`,
+        scopePrefix: `${baseUrl}/docs/`,
+        additionalScopePrefixes: [],
+      },
+      {
+        seedUrl: `${baseUrl}/other/`,
+        scopePrefix: `${baseUrl}/other/`,
+        additionalScopePrefixes: [],
+      },
+    ]
+
+    process.env["CONTENT_DIR"] = TEST_CONTENT_DIR
+
+    try {
+      await crawl({ seeds })
+    } finally {
+      delete process.env["CONTENT_DIR"]
+    }
+
+    const host = `localhost:${String(port)}`
+
+    // Assert pages from FIRST seed were saved
+    const indexPath = path.join(TEST_CONTENT_DIR, "docs", host, "docs", "index.txt")
+    const pageAPath = path.join(TEST_CONTENT_DIR, "docs", host, "docs", "page-a", "index.txt")
+    assert.ok(existsSync(indexPath), "first seed index saved")
+    assert.ok(existsSync(pageAPath), "first seed page-a saved")
+
+    // Assert pages from SECOND seed were saved
+    const otherIndexPath = path.join(TEST_CONTENT_DIR, "docs", host, "other", "index.txt")
+    const pageXPath = path.join(TEST_CONTENT_DIR, "docs", host, "other", "page-x", "index.txt")
+    assert.ok(existsSync(otherIndexPath), "second seed index saved")
+    assert.ok(existsSync(pageXPath), "second seed page-x saved")
+
+    // Verify content from second seed
+    assert.strictEqual(readFileSync(otherIndexPath, "utf-8"), pages["/other/"])
+    assert.strictEqual(readFileSync(pageXPath, "utf-8"), pages["/other/page-x"])
   })
 })

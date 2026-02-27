@@ -1,7 +1,7 @@
 # PRD: Multi-Seed Crawler Support
 
 **Project:** claude-code-docs-crawler
-**Branch:**
+**Branch:** main
 
 ## Introduction
 
@@ -18,7 +18,7 @@ The crawler currently supports a single hardcoded seed URL (`https://code.claude
 ## User Stories
 
 ### US-001: Define SeedConfig type and SEEDS array
-**Status:** pending
+**Status:** done
 **Description:** As a developer, I want seed configuration expressed as a typed array so that adding new seeds is a one-line change.
 
 **Acceptance Criteria:**
@@ -30,7 +30,7 @@ The crawler currently supports a single hardcoded seed URL (`https://code.claude
 - [ ] Lint passes (`npm run lint:js`)
 
 ### US-002: Update crawl() to use multiple seeds
-**Status:** pending
+**Status:** done
 **Description:** As a developer, I want `crawl()` to enqueue all seed URLs and merge all scope prefixes so that content from every seed is discovered and fetched.
 
 **Acceptance Criteria:**
@@ -44,7 +44,7 @@ The crawler currently supports a single hardcoded seed URL (`https://code.claude
 - [ ] Lint passes
 
 ### US-003: Update metadata types and buildMetadata
-**Status:** pending
+**Status:** done
 **Description:** As a developer, I want crawl metadata to record all seeds used so that downstream tools know the full crawl configuration.
 
 **Acceptance Criteria:**
@@ -57,7 +57,7 @@ The crawler currently supports a single hardcoded seed URL (`https://code.claude
 - [ ] Lint passes
 
 ### US-004: Update tests for multi-seed metadata
-**Status:** pending
+**Status:** done
 **Description:** As a developer, I want existing tests to pass with the new metadata shape so that confidence in correctness is maintained.
 
 **Acceptance Criteria:**
