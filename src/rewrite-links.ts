@@ -203,11 +203,12 @@ async function maybePrintGitDiff(opts: { absPath: string, updatedContent: string
 export async function rewriteMarkdownLinksInContent(
   contentDir: string,
   urlResolution: Record<string, UrlResolutionEntry>,
-  opts?: { showGitDiff?: boolean },
+  opts?: { showGitDiff?: boolean, subDir?: string },
 ): Promise<{ changedSavedPaths: string[], stats: RewriteStats }> {
   const absContentDir = path.resolve(contentDir)
   assertWithinRepoRoot(absContentDir, "contentDir")
-  const allFiles = await walk(absContentDir)
+  const walkRoot = opts?.subDir ? path.join(absContentDir, opts.subDir) : absContentDir
+  const allFiles = await walk(walkRoot)
 
   const changedSavedPaths: string[] = []
   let scannedFiles = 0

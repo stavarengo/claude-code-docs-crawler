@@ -180,11 +180,13 @@ describe("US-002: Multi-seed crawl", () => {
         seedUrl: `${baseUrl}/docs/`,
         scopePrefix: `${baseUrl}/docs/`,
         additionalScopePrefixes: [],
+        localPrefix: "",
       },
       {
         seedUrl: `${baseUrl}/other/`,
         scopePrefix: `${baseUrl}/other/`,
         additionalScopePrefixes: [],
+        localPrefix: "",
       },
     ]
 

@@ -71,7 +71,7 @@ describe("US-004: buildMetadata", () => {
     ])
 
     const metadata = buildMetadata({
-      seeds: [{ seedUrl: "http://example.com/docs/", scopePrefix: "http://example.com/docs/", additionalScopePrefixes: [] }],
+      seeds: [{ seedUrl: "http://example.com/docs/", scopePrefix: "http://example.com/docs/", additionalScopePrefixes: [], localPrefix: "" }],
       items,
       aborted: false,
     })
@@ -97,7 +97,7 @@ describe("US-004: buildMetadata", () => {
     ])
 
     const metadata = buildMetadata({
-      seeds: [{ seedUrl: "http://example.com/docs/", scopePrefix: "http://example.com/docs/", additionalScopePrefixes: [] }],
+      seeds: [{ seedUrl: "http://example.com/docs/", scopePrefix: "http://example.com/docs/", additionalScopePrefixes: [], localPrefix: "" }],
       items,
       aborted: false,
     })
@@ -111,7 +111,7 @@ describe("US-004: buildMetadata", () => {
     const items = new Map<string, { status: string, statusReason: string, fetchedAt: string }>()
 
     const metadata = buildMetadata({
-      seeds: [{ seedUrl: "http://example.com/docs/", scopePrefix: "http://example.com/docs/", additionalScopePrefixes: [] }],
+      seeds: [{ seedUrl: "http://example.com/docs/", scopePrefix: "http://example.com/docs/", additionalScopePrefixes: [], localPrefix: "" }],
       items,
       aborted: true,
     })
@@ -128,7 +128,7 @@ describe("US-004: buildMetadata", () => {
     ])
 
     const metadata = buildMetadata({
-      seeds: [{ seedUrl: "http://example.com/docs/", scopePrefix: "http://example.com/docs/", additionalScopePrefixes: [] }],
+      seeds: [{ seedUrl: "http://example.com/docs/", scopePrefix: "http://example.com/docs/", additionalScopePrefixes: [], localPrefix: "" }],
       items,
       aborted: false,
     })
@@ -230,7 +230,7 @@ describe("US-005: buildMetadata counts removed items in stats", () => {
     ])
 
     const metadata = buildMetadata({
-      seeds: [{ seedUrl: "http://example.com/docs/", scopePrefix: "http://example.com/docs/", additionalScopePrefixes: [] }],
+      seeds: [{ seedUrl: "http://example.com/docs/", scopePrefix: "http://example.com/docs/", additionalScopePrefixes: [], localPrefix: "" }],
       items,
       aborted: false,
     })
@@ -245,8 +245,8 @@ describe("US-005: buildMetadata counts removed items in stats", () => {
 describe("US-003: buildMetadata uses seeds array", () => {
   it("returns seeds array instead of seedUrl/scopePrefix", () => {
     const seeds: SeedConfig[] = [
-      { seedUrl: "http://example.com/docs/", scopePrefix: "http://example.com/docs/", additionalScopePrefixes: [] },
-      { seedUrl: "http://other.com/docs/", scopePrefix: "http://other.com/docs/", additionalScopePrefixes: ["http://extra.com/"] },
+      { seedUrl: "http://example.com/docs/", scopePrefix: "http://example.com/docs/", additionalScopePrefixes: [], localPrefix: "" },
+      { seedUrl: "http://other.com/docs/", scopePrefix: "http://other.com/docs/", additionalScopePrefixes: ["http://extra.com/"], localPrefix: "" },
     ]
     const items = new Map<string, { status: string, statusReason: string, fetchedAt: string }>([
       ["example.com/docs/page1/index.txt", { status: "success", statusReason: "new", fetchedAt: "2026-02-01T00:00:00.000Z" }],
@@ -287,6 +287,7 @@ describe("US-001: SeedConfig type and SEEDS array", () => {
       assert.strictEqual(typeof seed.seedUrl, "string", "seedUrl should be a string")
       assert.strictEqual(typeof seed.scopePrefix, "string", "scopePrefix should be a string")
       assert.ok(Array.isArray(seed.additionalScopePrefixes), "additionalScopePrefixes should be an array")
+      assert.strictEqual(typeof seed.localPrefix, "string", "localPrefix should be a string")
     }
   })
 
@@ -295,6 +296,7 @@ describe("US-001: SeedConfig type and SEEDS array", () => {
     assert.ok(codeSeed, "code.claude.com seed should exist")
     assert.strictEqual(codeSeed.scopePrefix, "https://code.claude.com/docs/en/")
     assert.deepStrictEqual(codeSeed.additionalScopePrefixes, ["https://github.com/aws-solutions-library-samples"])
+    assert.strictEqual(codeSeed.localPrefix, "claude")
   })
 
   it("contains the platform.claude.com seed", () => {
@@ -302,5 +304,6 @@ describe("US-001: SeedConfig type and SEEDS array", () => {
     assert.ok(platformSeed, "platform.claude.com seed should exist")
     assert.strictEqual(platformSeed.scopePrefix, "https://platform.claude.com/docs/en")
     assert.deepStrictEqual(platformSeed.additionalScopePrefixes, [])
+    assert.strictEqual(platformSeed.localPrefix, "claude")
   })
 })

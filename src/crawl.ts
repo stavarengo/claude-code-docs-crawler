@@ -15,6 +15,7 @@ export interface SeedConfig {
   seedUrl: string
   scopePrefix: string
   additionalScopePrefixes: string[]
+  localPrefix: string
 }
 
 export const SEEDS: SeedConfig[] = [
@@ -22,21 +23,25 @@ export const SEEDS: SeedConfig[] = [
     seedUrl: "https://code.claude.com/docs/llms.txt",
     scopePrefix: "https://code.claude.com/docs/en/",
     additionalScopePrefixes: ["https://github.com/aws-solutions-library-samples"],
+    localPrefix: "claude",
   },
   {
     seedUrl: "https://platform.claude.com/llms.txt",
     scopePrefix: "https://platform.claude.com/docs/en",
     additionalScopePrefixes: [],
+    localPrefix: "claude",
   },
   {
     seedUrl: "https://developers.openai.com/llms.txt",
     scopePrefix: "https://developers.openai.com/",
     additionalScopePrefixes: [],
+    localPrefix: "openai",
   },
   // {
   //   seedUrl: "https://modelcontextprotocol.io/llms.txt",
   //   scopePrefix: "https://modelcontextprotocol.io/",
   //   additionalScopePrefixes: [],
+  //   localPrefix: "mcp",
   // },
 ]
 
@@ -107,10 +112,12 @@ function extractCanonical(html: string): string | null {
 
 export type SaveResult = "new" | "changed" | "unchanged"
 
-export async function saveContent(url: string, body: string, contentDir: string = DEFAULT_CONTENT_DIR): Promise<SaveResult> {
+export async function saveContent(url: string, body: string, contentDir: string = DEFAULT_CONTENT_DIR, localPrefix: string = ""): Promise<SaveResult> {
   const resolvedContentDir = resolveContentDir(contentDir)
   const parsed = new URL(url)
-  let filePath = path.join(resolvedContentDir, parsed.host, parsed.pathname)
+  let filePath = localPrefix
+    ? path.join(resolvedContentDir, localPrefix, parsed.host, parsed.pathname)
+    : path.join(resolvedContentDir, parsed.host, parsed.pathname)
 
   // Handle directory-style URLs
   if (filePath.endsWith("/") || !path.extname(filePath)) {
@@ -238,34 +245,31 @@ export function markRemovedItems(
   }
 }
 
-function urlToRelativePath(url: string): string {
+function urlToRelativePath(url: string, localPrefix: string = ""): string {
   const parsed = new URL(url)
-  let filePath = path.join(parsed.host, parsed.pathname)
+  let filePath = localPrefix
+    ? path.join(localPrefix, parsed.host, parsed.pathname)
+    : path.join(parsed.host, parsed.pathname)
   if (filePath.endsWith("/") || !path.extname(filePath)) {
     filePath = path.join(filePath, "index.txt")
   }
   return filePath
 }
 
-// Main crawl function — accepts config via environment variables:
-//   SEED_URL, SCOPE_PREFIX, CONTENT_DIR (all fall back to hardcoded defaults)
-export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[] }) {
-  // Determine seeds: env var override (single seed) > opts.seeds > SEEDS constant
-  let seeds: SeedConfig[]
-  if (process.env["SEED_URL"]) {
-    seeds = [{
-      seedUrl: process.env["SEED_URL"],
-      scopePrefix: process.env["SCOPE_PREFIX"] ?? process.env["SEED_URL"],
-      additionalScopePrefixes: [],
-    }]
-  } else {
-    seeds = opts?.seeds ?? SEEDS
-  }
+interface CrawlGroupResult {
+  items: Map<string, ItemRecord>
+  urlResolution: Record<string, UrlResolutionEntry>
+  fetchedCount: number
+  aborted: boolean
+}
 
-  const scopePrefixes = seeds.flatMap(s => [s.scopePrefix, ...s.additionalScopePrefixes])
-  const primaryScopePrefixes = seeds.map(s => s.scopePrefix)
-  const contentDir = resolveContentDir(process.env["CONTENT_DIR"] ?? DEFAULT_CONTENT_DIR)
-  const downloadsDir = path.join(contentDir, DOWNLOADS_SUBDIR)
+async function crawlGroup(
+  groupSeeds: SeedConfig[],
+  localPrefix: string,
+  downloadsDir: string,
+): Promise<CrawlGroupResult> {
+  const scopePrefixes = groupSeeds.flatMap(s => [s.scopePrefix, ...s.additionalScopePrefixes])
+  const primaryScopePrefixes = groupSeeds.map(s => s.scopePrefix)
 
   const queue: string[] = []
   const queued = new Set<string>()
@@ -277,18 +281,6 @@ export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[]
 
   const items = new Map<string, ItemRecord>()
   const urlResolution: Record<string, UrlResolutionEntry> = {}
-
-  // Load prior crawl metadata if it exists
-  const metadataPath = path.join(contentDir, "crawl-metadata.json")
-  let previousItems: Record<string, ItemRecord> = {}
-  if (existsSync(metadataPath)) {
-    try {
-      const prior = JSON.parse(readFileSync(metadataPath, "utf-8")) as { items?: Record<string, ItemRecord> }
-      previousItems = prior.items ?? {}
-    } catch {
-      // Ignore malformed prior metadata
-    }
-  }
 
   function enqueue(url: string) {
     const normalized = normalize(url)
@@ -309,7 +301,7 @@ export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[]
     queued.add(url)
   }
 
-  for (const seed of seeds) {
+  for (const seed of groupSeeds) {
     enqueue(seed.seedUrl)
   }
 
@@ -329,7 +321,7 @@ export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[]
         const isDocsDomain = primaryScopePrefixes.some(prefix => result.finalUrl.startsWith(prefix))
 
         if (isHtml && isDocsDomain) {
-          // HTML from code.claude.com: extract canonical to discover the markdown URL
+          // HTML from docs domain: extract canonical to discover the markdown URL
           const canonical = extractCanonical(result.body)
           if (canonical && canonical !== result.finalUrl) {
             enqueue(canonical)
@@ -344,15 +336,15 @@ export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[]
           // HTML from GitHub: try the raw.githubusercontent.com version if it's a .md file
           const rawUrl = toRawGitHubUrl(result.finalUrl)
           if (rawUrl?.endsWith(".md")) {
-            const rawSavedPath = urlToRelativePath(rawUrl)
+            const rawSavedPath = urlToRelativePath(rawUrl, localPrefix)
             urlResolution[url] = { finalUrl: rawUrl, savedPath: rawSavedPath }
             urlResolution[result.finalUrl] = { finalUrl: rawUrl, savedPath: rawSavedPath }
             urlResolution[rawUrl] = { finalUrl: rawUrl, savedPath: rawSavedPath }
             enqueue(rawUrl)
           }
         } else {
-          const changeStatus = await saveContent(result.finalUrl, result.body, downloadsDir)
-          const key = urlToRelativePath(result.finalUrl)
+          const changeStatus = await saveContent(result.finalUrl, result.body, downloadsDir, localPrefix)
+          const key = urlToRelativePath(result.finalUrl, localPrefix)
           urlResolution[url] = { finalUrl: result.finalUrl, savedPath: key }
           urlResolution[result.finalUrl] = { finalUrl: result.finalUrl, savedPath: key }
           items.set(key, {
@@ -430,35 +422,101 @@ export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[]
     if (aborted) break
   }
 
-  // Mark pages from prior run that were not visited in this run
-  markRemovedItems(previousItems, items)
+  return { items, urlResolution, fetchedCount: fetched.size, aborted }
+}
 
-  // Rewrite absolute markdown links to local relative paths (when a downloaded local file exists)
-  const rewriteResult = await rewriteMarkdownLinksInContent(downloadsDir, urlResolution, { showGitDiff: opts?.showGitDiff === true })
-  if (rewriteResult.stats.changedFiles > 0) {
-    console.log(
-      `Rewrote links in ${String(rewriteResult.stats.changedFiles)}/${String(rewriteResult.stats.scannedFiles)} markdown files.`,
-    )
-    for (const savedPath of rewriteResult.changedSavedPaths) {
-      const item = items.get(savedPath)
-      if (item?.status === "success" && item.statusReason === "unchanged") {
-        item.statusReason = "changed"
+// Main crawl function — accepts config via environment variables:
+//   SEED_URL, SCOPE_PREFIX, CONTENT_DIR (all fall back to hardcoded defaults)
+export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[] }) {
+  // Determine seeds: env var override (single seed) > opts.seeds > SEEDS constant
+  let seeds: SeedConfig[]
+  if (process.env["SEED_URL"]) {
+    seeds = [{
+      seedUrl: process.env["SEED_URL"],
+      scopePrefix: process.env["SCOPE_PREFIX"] ?? process.env["SEED_URL"],
+      additionalScopePrefixes: [],
+      localPrefix: "",
+    }]
+  } else {
+    seeds = opts?.seeds ?? SEEDS
+  }
+
+  const contentDir = resolveContentDir(process.env["CONTENT_DIR"] ?? DEFAULT_CONTENT_DIR)
+  const downloadsDir = path.join(contentDir, DOWNLOADS_SUBDIR)
+
+  // Load prior crawl metadata if it exists
+  const metadataPath = path.join(contentDir, "crawl-metadata.json")
+  let previousItems: Record<string, ItemRecord> = {}
+  if (existsSync(metadataPath)) {
+    try {
+      const prior = JSON.parse(readFileSync(metadataPath, "utf-8")) as { items?: Record<string, ItemRecord> }
+      previousItems = prior.items ?? {}
+    } catch {
+      // Ignore malformed prior metadata
+    }
+  }
+
+  // Group seeds by localPrefix
+  const groups = new Map<string, SeedConfig[]>()
+  for (const seed of seeds) {
+    const group = groups.get(seed.localPrefix) ?? []
+    group.push(seed)
+    groups.set(seed.localPrefix, group)
+  }
+
+  const allItems = new Map<string, ItemRecord>()
+  const allUrlResolution: Record<string, UrlResolutionEntry> = {}
+  let anyAborted = false
+  let totalFetched = 0
+
+  for (const [localPrefix, groupSeeds] of groups) {
+    const result = await crawlGroup(groupSeeds, localPrefix, downloadsDir)
+
+    // Mark pages from prior run that were not visited in this group
+    const groupPreviousItems: Record<string, ItemRecord> = {}
+    for (const [key, item] of Object.entries(previousItems)) {
+      if (!localPrefix || key.startsWith(localPrefix + "/")) {
+        groupPreviousItems[key] = item
       }
     }
+    markRemovedItems(groupPreviousItems, result.items)
+
+    // Rewrite absolute markdown links to local relative paths within this group
+    const rewriteResult = await rewriteMarkdownLinksInContent(downloadsDir, result.urlResolution, {
+      showGitDiff: opts?.showGitDiff === true,
+      subDir: localPrefix || undefined,
+    })
+    if (rewriteResult.stats.changedFiles > 0) {
+      console.log(
+        `Rewrote links in ${String(rewriteResult.stats.changedFiles)}/${String(rewriteResult.stats.scannedFiles)} markdown files.`,
+      )
+      for (const savedPath of rewriteResult.changedSavedPaths) {
+        const item = result.items.get(savedPath)
+        if (item?.status === "success" && item.statusReason === "unchanged") {
+          item.statusReason = "changed"
+        }
+      }
+    }
+
+    // Merge into combined results
+    for (const [key, value] of result.items) allItems.set(key, value)
+    Object.assign(allUrlResolution, result.urlResolution)
+    totalFetched += result.fetchedCount
+    if (result.aborted) anyAborted = true
   }
 
   // Write crawl metadata
   const metadata = buildMetadata({
     seeds,
-    items,
-    urlResolution,
-    aborted,
+    items: allItems,
+    urlResolution: allUrlResolution,
+    aborted: anyAborted,
   })
 
   await mkdirAsync(path.dirname(metadataPath), { recursive: true })
   await writeFileAsync(metadataPath, JSON.stringify(metadata, null, 2), "utf-8")
   console.log(`Metadata written to ${metadataPath}`)
-  console.log(`Done. Fetched ${String(fetched.size)} pages.`)
+  console.log(`Done. Fetched ${String(totalFetched)} pages.`)
 }
 
 // Only run crawl when executed directly as a script (not when imported)
