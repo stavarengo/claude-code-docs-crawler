@@ -334,11 +334,11 @@ export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[]
           if (canonical && canonical !== result.finalUrl) {
             enqueue(canonical)
             if (!canonical.endsWith(".md")) {
-              enqueue(canonical + ".md")
+              enqueue(canonical.endsWith("/") ? canonical + "index.md" : canonical + ".md")
             }
           }
           if (!result.finalUrl.endsWith(".md")) {
-            enqueue(result.finalUrl + ".md")
+            enqueue(result.finalUrl.endsWith("/") ? result.finalUrl + "index.md" : result.finalUrl + ".md")
           }
         } else if (isHtml && result.finalUrl.startsWith("https://github.com/")) {
           // HTML from GitHub: try the raw.githubusercontent.com version if it's a .md file
