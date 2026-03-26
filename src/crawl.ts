@@ -28,6 +28,11 @@ export const SEEDS: SeedConfig[] = [
     scopePrefix: "https://platform.claude.com/docs/en",
     additionalScopePrefixes: [],
   },
+  {
+    seedUrl: "https://developers.openai.com/llms.txt",
+    scopePrefix: "https://developers.openai.com",
+    additionalScopePrefixes: [],
+  },
   // {
   //   seedUrl: "https://modelcontextprotocol.io/llms.txt",
   //   scopePrefix: "https://modelcontextprotocol.io/",
