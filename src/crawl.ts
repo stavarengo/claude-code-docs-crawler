@@ -32,8 +32,14 @@ export const SEEDS: SeedConfig[] = [
     localPrefix: "claude",
   },
   {
-    seedUrl: "https://developers.openai.com/llms.txt",
-    scopePrefix: "https://developers.openai.com/",
+    seedUrl: "https://developers.openai.com/api/docs/llms.txt",
+    scopePrefix: "https://developers.openai.com/api/docs/",
+    additionalScopePrefixes: [],
+    localPrefix: "openai",
+  },
+  {
+    seedUrl: "https://developers.openai.com/api/reference/llms.txt",
+    scopePrefix: "https://developers.openai.com/api/reference/",
     additionalScopePrefixes: [],
     localPrefix: "openai",
   },
