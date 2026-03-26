@@ -30,7 +30,7 @@ export const SEEDS: SeedConfig[] = [
   },
   {
     seedUrl: "https://developers.openai.com/llms.txt",
-    scopePrefix: "https://developers.openai.com",
+    scopePrefix: "https://developers.openai.com/",
     additionalScopePrefixes: [],
   },
   // {
