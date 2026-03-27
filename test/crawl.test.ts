@@ -294,10 +294,10 @@ describe("Seed groups run in parallel", () => {
       const elapsed = Date.now() - start
 
       // If sequential: ~200ms (2 x 100ms). If parallel: ~100ms.
-      // Wide margin for CI — just verify it's faster than sequential would be.
+      // 150ms catches sequential while leaving margin for CI.
       assert.ok(
-        elapsed < GROUP_DELAY * 2 + 50,
-        `expected parallel execution (elapsed ${String(elapsed)}ms < ${String(GROUP_DELAY * 2 + 50)}ms)`,
+        elapsed < GROUP_DELAY * 1.5,
+        `expected parallel execution (elapsed ${String(elapsed)}ms < ${String(GROUP_DELAY * 1.5)}ms)`,
       )
     } finally {
       delete process.env["CONTENT_DIR"]

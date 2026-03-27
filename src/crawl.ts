@@ -278,7 +278,7 @@ async function crawlGroup(
   const scopePrefixes = groupSeeds.flatMap(s => [s.scopePrefix, ...s.additionalScopePrefixes])
   const primaryScopePrefixes = groupSeeds.map(s => s.scopePrefix)
 
-  let pending: string[] = []
+  const pending: string[] = []
   let pendingIdx = 0
   const queued = new Set<string>()
   const fetched = new Set<string>()
