@@ -278,7 +278,8 @@ async function crawlGroup(
   const scopePrefixes = groupSeeds.flatMap(s => [s.scopePrefix, ...s.additionalScopePrefixes])
   const primaryScopePrefixes = groupSeeds.map(s => s.scopePrefix)
 
-  const pending: string[] = []
+  let pending: string[] = []
+  let pendingIdx = 0
   const queued = new Set<string>()
   const fetched = new Set<string>()
   const consecutiveErrors = new Map<string, { count: number, error: string }>()
@@ -313,6 +314,7 @@ async function crawlGroup(
         const isDocsDomain = primaryScopePrefixes.some(prefix => result.finalUrl.startsWith(prefix))
 
         if (isHtml && isDocsDomain) {
+          // HTML from docs domain: extract canonical to discover the markdown URL
           const canonical = extractCanonical(result.body)
           if (canonical && canonical !== result.finalUrl) {
             enqueue(canonical)
@@ -324,6 +326,7 @@ async function crawlGroup(
             enqueue(result.finalUrl.endsWith("/") ? result.finalUrl + "index.md" : result.finalUrl + ".md")
           }
         } else if (isHtml && result.finalUrl.startsWith("https://github.com/")) {
+          // HTML from GitHub: try the raw.githubusercontent.com version if it's a .md file
           const rawUrl = toRawGitHubUrl(result.finalUrl)
           if (rawUrl?.endsWith(".md")) {
             const rawSavedPath = urlToRelativePath(rawUrl, localPrefix)
@@ -420,16 +423,19 @@ async function crawlGroup(
   const inFlight = new Set<Promise<void>>()
 
   function submitPending(): void {
-    while (pending.length > 0 && !aborted) {
-      const url = pending.shift()!
+    while (pendingIdx < pending.length && !aborted) {
+      const url = pending[pendingIdx++]!
       queued.delete(url)
 
       const promise = queueManager.fetch(url, scopePrefixes)
         .then(result => processResult(url, result))
         .then(() => {
           inFlight.delete(promise)
-          // After processing, submit any newly discovered URLs
           submitPending()
+        })
+        .catch(err => {
+          inFlight.delete(promise)
+          console.error(`Unexpected error processing ${url}:`, err)
         })
       inFlight.add(promise)
     }

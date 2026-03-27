@@ -11,6 +11,7 @@ class DomainQueue {
   private inFlight = 0
   private readonly pending: PendingFetch[] = []
   private pausedUntil = 0
+  private pauseTimer: ReturnType<typeof setTimeout> | undefined
 
   constructor(maxConcurrency: number) {
     this.maxConcurrency = maxConcurrency
@@ -25,8 +26,8 @@ class DomainQueue {
 
   pause(ms: number): void {
     this.pausedUntil = Date.now() + ms
-    // Schedule a drain after the pause expires
-    setTimeout(() => this.drain(), ms)
+    clearTimeout(this.pauseTimer)
+    this.pauseTimer = setTimeout(() => this.drain(), ms)
   }
 
   private drain(): void {
