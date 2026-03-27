@@ -116,6 +116,17 @@ function extractCanonical(html: string): string | null {
   return match?.[1] ?? null
 }
 
+function getMarkdownGuesses(url: string): string[] {
+  if (url.endsWith(".md")) return []
+  if (url.endsWith("/")) {
+    return [
+      `${url}index.md`,
+      `${url.slice(0, -1)}.md`,
+    ]
+  }
+  return [`${url}.md`]
+}
+
 export type SaveResult = "new" | "changed" | "unchanged"
 
 export async function saveContent(url: string, body: string, contentDir: string = DEFAULT_CONTENT_DIR, localPrefix: string = ""): Promise<SaveResult> {
@@ -269,62 +280,79 @@ interface CrawlGroupResult {
   aborted: boolean
 }
 
-async function crawlGroup(
-  groupSeeds: SeedConfig[],
-  localPrefix: string,
+interface PendingUrl {
+  url: string
+  bestEffort: boolean
+}
+
+async function crawlSeed(
+  seed: SeedConfig,
   downloadsDir: string,
   queueManager: QueueManager,
 ): Promise<CrawlGroupResult> {
-  const scopePrefixes = groupSeeds.flatMap(s => [s.scopePrefix, ...s.additionalScopePrefixes])
-  const primaryScopePrefixes = groupSeeds.map(s => s.scopePrefix)
+  const scopePrefixes = [seed.scopePrefix, ...seed.additionalScopePrefixes]
+  const primaryScopePrefix = seed.scopePrefix
+  const localPrefix = seed.localPrefix
 
-  const pending: string[] = []
+  const pending: PendingUrl[] = []
   let pendingIdx = 0
-  const queued = new Set<string>()
+  const accepted = new Set<string>()
   const fetched = new Set<string>()
   const consecutiveErrors = new Map<string, { count: number, error: string }>()
-  const failed = new Set<string>()
   let consecutive429s = 0
   let aborted = false
 
   const items = new Map<string, ItemRecord>()
   const urlResolution: Record<string, UrlResolutionEntry> = {}
 
-  function enqueue(url: string) {
+  function enqueue(url: string, opts?: { bestEffort?: boolean }) {
     const normalized = normalize(url)
     if (!normalized) return
-    if (queued.has(normalized) || fetched.has(normalized) || failed.has(normalized)) return
-    pending.push(normalized)
-    queued.add(normalized)
+    if (accepted.has(normalized)) return
+    pending.push({
+      url: normalized,
+      bestEffort: opts?.bestEffort === true,
+    })
+    accepted.add(normalized)
   }
 
-  function requeue(url: string) {
-    pending.push(url)
-    queued.add(url)
+  function enqueueMarkdownGuesses(url: string) {
+    for (const guess of getMarkdownGuesses(url)) {
+      enqueue(guess, { bestEffort: true })
+    }
   }
 
-  async function processResult(url: string, result: FetchResult): Promise<void> {
+  function requeue(entry: PendingUrl) {
+    pending.push(entry)
+  }
+
+  function markFailed(url: string) {
+    items.set(url, {
+      status: "failed",
+      statusReason: "httpError",
+      fetchedAt: new Date().toISOString(),
+    })
+  }
+
+  async function processResult(entry: PendingUrl, result: FetchResult): Promise<void> {
+    const { url, bestEffort } = entry
+
     switch (result.type) {
       case "success": {
         consecutive429s = 0
         fetched.add(result.finalUrl)
-        queued.delete(result.finalUrl) // handle redirect collision
 
         const isHtml = result.contentType.includes("text/html")
-        const isDocsDomain = primaryScopePrefixes.some(prefix => result.finalUrl.startsWith(prefix))
+        const isDocsDomain = result.finalUrl.startsWith(primaryScopePrefix)
 
         if (isHtml && isDocsDomain) {
           // HTML from docs domain: extract canonical to discover the markdown URL
           const canonical = extractCanonical(result.body)
           if (canonical && canonical !== result.finalUrl) {
             enqueue(canonical)
-            if (!canonical.endsWith(".md")) {
-              enqueue(canonical.endsWith("/") ? canonical + "index.md" : canonical + ".md")
-            }
+            enqueueMarkdownGuesses(canonical)
           }
-          if (!result.finalUrl.endsWith(".md")) {
-            enqueue(result.finalUrl.endsWith("/") ? result.finalUrl + "index.md" : result.finalUrl + ".md")
-          }
+          enqueueMarkdownGuesses(result.finalUrl)
         } else if (isHtml && result.finalUrl.startsWith("https://github.com/")) {
           // HTML from GitHub: try the raw.githubusercontent.com version if it's a .md file
           const rawUrl = toRawGitHubUrl(result.finalUrl)
@@ -333,7 +361,7 @@ async function crawlGroup(
             urlResolution[url] = { finalUrl: rawUrl, savedPath: rawSavedPath }
             urlResolution[result.finalUrl] = { finalUrl: rawUrl, savedPath: rawSavedPath }
             urlResolution[rawUrl] = { finalUrl: rawUrl, savedPath: rawSavedPath }
-            enqueue(rawUrl)
+            enqueue(rawUrl, { bestEffort: true })
           }
         } else {
           const changeStatus = await saveContent(result.finalUrl, result.body, downloadsDir, localPrefix)
@@ -355,7 +383,7 @@ async function crawlGroup(
       case "rate-limited": {
         consecutive429s++
         if (consecutive429s >= 3) {
-          console.error("Aborting: 3 consecutive 429 responses")
+          console.error("\x1b[31mAborting: 3 consecutive 429 responses\x1b[0m")
           aborted = true
           break
         }
@@ -363,21 +391,20 @@ async function crawlGroup(
         console.log(`Rate limited, waiting ${String(delay)}ms...`)
         const hostname = new URL(url).hostname
         queueManager.pauseDomain(hostname, delay)
-        requeue(url)
+        if (bestEffort) {
+          markFailed(url)
+          break
+        }
+        requeue(entry)
         break
       }
 
       case "error": {
         consecutive429s = 0
         const errorKey = result.status ? String(result.status) : (result.reason ?? "unknown")
-        console.log(`Error fetching ${url}: ${errorKey}`)
-        if (result.status === 404 || result.status === 406) {
-          failed.add(url)
-          items.set(url, {
-            status: "failed",
-            statusReason: "httpError",
-            fetchedAt: new Date().toISOString(),
-          })
+        console.log(`\x1b[31mError fetching ${url}: ${errorKey}\x1b[0m`)
+        if (bestEffort || result.status === 404 || result.status === 406) {
+          markFailed(url)
         } else {
           const prev = consecutiveErrors.get(url)
           const entry = (prev?.error === errorKey)
@@ -385,15 +412,13 @@ async function crawlGroup(
             : { count: 1, error: errorKey }
           consecutiveErrors.set(url, entry)
           if (entry.count >= 3) {
-            console.log(`Giving up on ${url} after 3 consecutive ${errorKey} errors`)
-            failed.add(url)
-            items.set(url, {
-              status: "failed",
-              statusReason: "httpError",
-              fetchedAt: new Date().toISOString(),
-            })
+            console.log(`\x1b[31mGiving up on ${url} after 3 consecutive ${errorKey} errors\x1b[0m`)
+            markFailed(url)
           } else {
-            requeue(url)
+            requeue({
+              url,
+              bestEffort: false,
+            })
           }
         }
         break
@@ -414,9 +439,7 @@ async function crawlGroup(
     }
   }
 
-  for (const seed of groupSeeds) {
-    enqueue(seed.seedUrl)
-  }
+  enqueue(seed.seedUrl)
 
   // Concurrent fetch loop: submit all pending URLs to the QueueManager,
   // process results as they resolve, and submit newly discovered URLs
@@ -424,18 +447,18 @@ async function crawlGroup(
 
   function submitPending(): void {
     while (pendingIdx < pending.length && !aborted) {
-      const url = pending[pendingIdx++]!
-      queued.delete(url)
+      const entry = pending[pendingIdx++]!
+      const { url } = entry
 
       const promise = queueManager.fetch(url, scopePrefixes)
-        .then(result => processResult(url, result))
+        .then(result => processResult(entry, result))
         .then(() => {
           inFlight.delete(promise)
           submitPending()
         })
         .catch(err => {
           inFlight.delete(promise)
-          console.error(`Unexpected error processing ${url}:`, err)
+          console.error(`\x1b[31mUnexpected error processing ${url}:\x1b[0m`, err)
         })
       inFlight.add(promise)
     }
@@ -482,22 +505,30 @@ export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[]
     }
   }
 
-  // Group seeds by localPrefix
-  const groups = new Map<string, SeedConfig[]>()
-  for (const seed of seeds) {
-    const group = groups.get(seed.localPrefix) ?? []
-    group.push(seed)
-    groups.set(seed.localPrefix, group)
-  }
-
   const queueManager = new QueueManager(opts?.concurrency)
 
-  // Launch all seed groups concurrently — each group has its own dedup state,
-  // scope rules, and items; only the QueueManager is shared.
-  const groupEntries = Array.from(groups.entries())
-  const groupResults = await Promise.all(groupEntries.map(([localPrefix, groupSeeds]) =>
-    crawlGroup(groupSeeds, localPrefix, downloadsDir, queueManager)
-      .then(result => ({ localPrefix, result }))))
+  // Launch all seeds concurrently — each seed has its own dedup state and
+  // retry bookkeeping; only the QueueManager is shared across seeds.
+  const seedResults = await Promise.all(seeds.map(seed =>
+    crawlSeed(seed, downloadsDir, queueManager)
+      .then(result => ({ seed, result }))))
+
+  // Aggregate seed results by localPrefix for post-processing and metadata merge.
+  const groups = new Map<string, CrawlGroupResult>()
+  for (const { seed, result } of seedResults) {
+    const group = groups.get(seed.localPrefix) ?? {
+      items: new Map<string, ItemRecord>(),
+      urlResolution: {},
+      fetchedCount: 0,
+      aborted: false,
+    }
+
+    for (const [key, value] of result.items) group.items.set(key, value)
+    Object.assign(group.urlResolution, result.urlResolution)
+    group.fetchedCount += result.fetchedCount
+    group.aborted = group.aborted || result.aborted
+    groups.set(seed.localPrefix, group)
+  }
 
   // Post-group processing runs after all groups complete
   const allItems = new Map<string, ItemRecord>()
@@ -505,7 +536,7 @@ export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[]
   let anyAborted = false
   let totalFetched = 0
 
-  for (const { localPrefix, result } of groupResults) {
+  for (const [localPrefix, result] of groups) {
     // Mark pages from prior run that were not visited in this group
     const groupPreviousItems: Record<string, ItemRecord> = {}
     for (const [key, item] of Object.entries(previousItems)) {
@@ -516,10 +547,10 @@ export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[]
     markRemovedItems(groupPreviousItems, result.items)
 
     // Rewrite absolute markdown links to local relative paths within this group
-    const rewriteResult = await rewriteMarkdownLinksInContent(downloadsDir, result.urlResolution, {
-      showGitDiff: opts?.showGitDiff === true,
-      subDir: localPrefix || undefined,
-    })
+    const rewriteOptions = localPrefix
+      ? { showGitDiff: opts?.showGitDiff === true, subDir: localPrefix }
+      : { showGitDiff: opts?.showGitDiff === true }
+    const rewriteResult = await rewriteMarkdownLinksInContent(downloadsDir, result.urlResolution, rewriteOptions)
     if (rewriteResult.stats.changedFiles > 0) {
       console.log(
         `Rewrote links in ${String(rewriteResult.stats.changedFiles)}/${String(rewriteResult.stats.scannedFiles)} markdown files.`,
