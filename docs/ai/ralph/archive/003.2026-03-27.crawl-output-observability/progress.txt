@@ -1,0 +1,72 @@
+# PRD: Crawl Output Observability
+
+Base commit: 782171ec1b061ddd55cd0b3e4199218fa91bfcda
+Final commit: 310cd0a33701e037be3a1494781f4b7b779a4f17
+Squash from: 782171ec1b061ddd55cd0b3e4199218fa91bfcda
+
+## Codebase Patterns
+
+- `src/crawl.ts` now centralizes crawl output through a tiny `logEvent(level, event, fields)` helper that renders `[LEVEL] event.name key=value` lines and routes them to exactly one console call per event (`console.log`, `console.warn`, or `console.error`).
+- Logging tests capture console output by temporarily replacing `console.log`, `console.warn`, and `console.error`, storing the raw argument arrays, and asserting against `args[0]` substrings rather than exact full-line matches.
+- Markdown guess-family observability in `src/crawl.ts` is tracked per seed via a `guessGroups` map keyed by original URL plus `PendingUrl.guessGroupOriginalUrl`; emit exactly one grouped result only after every attempt in that family has a terminal outcome.
+- Plain `node --test` for `.ts` crawler tests relies on one-line `src/*.js` bridge modules that re-export the TypeScript sources behind existing `.js` import specifiers; keep those bridge filenames aligned with the `.ts` modules and ignored by ESLint.
+
+## 2026-03-27 - US-001
+
+- Added structured crawl logging primitives in `src/crawl.ts`: severity model (`INFO`, `NOTICE`, `WARN`, `ERROR`, `SUMMARY`), stable key/value formatting, and single-call console emission per logical event
+- Replaced ad hoc crawl output with structured events for fetch failures, rate limits, aborts, saved content, metadata writes, and run summaries
+- Repaired the blocked worktree test state so `test/queue-manager.test.ts` parses cleanly and the new logging coverage in `test/crawl-logging.test.ts` runs under the working targeted suite
+- Files changed: `src/crawl.ts`, `src/queue-manager.ts`, `src/rewrite-links.ts`, `test/crawl-logging.test.ts`, `test/crawl-queue-behavior.test.ts`, `test/queue-manager.test.ts`, `AGENTS.md`, `docs/ai/ralph/current/prd.md`, `docs/ai/ralph/current/progress.txt`
+- Verification: `npx tsc --noEmit -p tsconfig.node.json`, `npm run lint:js`, `node --import tsx --test test/queue-manager.test.ts test/crawl-queue-behavior.test.ts test/crawl-logging.test.ts`
+- **Learnings for future iterations:**
+
+  - The logging helper should own console routing as well as formatting; tests can then assert visible behavior without depending on internal control flow.
+  - For console-capture tests, storing raw `args` arrays avoids accidental coupling to `console` formatting semantics while still letting assertions focus on the first rendered log line.
+
+## 2026-03-27 17:55 UTC - US-002
+
+- Added logging-focused regression coverage for grouped markdown guess success and grouped all-fail behavior in `test/crawl-logging.test.ts`
+- Tightened `src/crawl.ts` typing around grouped guess tracking so `PendingUrl` still satisfies `exactOptionalPropertyTypes` while grouped outcomes remain keyed by the original URL
+- Verified grouped guess logging stays compatible with the existing queue-behavior and queue-manager working suite
+- Files changed: `src/crawl.ts`, `test/crawl-logging.test.ts`, `docs/ai/ralph/current/prd.md`, `docs/ai/ralph/current/progress.txt`
+- Verification: `npx tsc --noEmit -p tsconfig.node.json`, `npm run lint:js`, `node --import tsx --test test/queue-manager.test.ts test/crawl-queue-behavior.test.ts test/crawl-logging.test.ts`
+- **Learnings for future iterations:**
+
+  - Grouped markdown-guess events are easiest to verify by asserting for one visible `fetch.guess_resolved` or `fetch.guess_failed` line and separately asserting that individual guess URLs never appear in `console.error`.
+  - When `exactOptionalPropertyTypes` is enabled, build `PendingUrl` objects incrementally instead of assigning `undefined` into optional properties.
+
+## 2026-03-27 17:57 UTC - US-003
+
+- Made blocker and terminal-failure log fields more explicit in `src/crawl.ts`, adding `effect=run_aborted` to consecutive-429 aborts and `terminal_reason` plus `retry_count` to primary retry exhaustion
+- Extended `test/crawl-logging.test.ts` to verify rate-limit retry visibility fields and terminal give-up logging for a primary URL
+- Kept guess-family behavior aligned with US-002 so guessed 404/406 outcomes still avoid independent `ERROR` lines
+- Files changed: `src/crawl.ts`, `test/crawl-logging.test.ts`, `docs/ai/ralph/current/prd.md`, `docs/ai/ralph/current/progress.txt`
+- Verification: `npx tsc --noEmit -p tsconfig.node.json`, `npm run lint:js`, `node --import tsx --test test/queue-manager.test.ts test/crawl-queue-behavior.test.ts test/crawl-logging.test.ts`
+- **Learnings for future iterations:**
+
+  - For blocker-oriented log events, encode the operator-visible next step directly in fields like `next_action` or `effect`; that keeps CI diagnosis grep-friendly without relying on prose.
+  - Small log-shape changes are cheapest to lock down by extending the existing console-capture integration tests instead of adding a new harness.
+
+## 2026-03-27 18:00 UTC - US-004
+
+- Added run-start, seed-start, seed-summary, always-on rewrite-complete, and richer run-summary events in `src/crawl.ts`
+- Kept `content.saved` logging unchanged while extending the successful-crawl logging test to assert the new lifecycle and summary events end-to-end
+- Used a small `countItemsByStatus()` helper to derive seed-level success/skipped/failed counts without changing crawl behavior
+- Files changed: `src/crawl.ts`, `test/crawl-logging.test.ts`, `docs/ai/ralph/current/prd.md`, `docs/ai/ralph/current/progress.txt`
+- Verification: `npx tsc --noEmit -p tsconfig.node.json`, `npm run lint:js`, `node --import tsx --test test/queue-manager.test.ts test/crawl-queue-behavior.test.ts test/crawl-logging.test.ts`
+- **Learnings for future iterations:**
+
+  - Seed-level observability is easiest to keep accurate by logging from the per-seed result objects immediately after `Promise.all` resolves, before group-level post-processing mutates the merged view.
+  - Even when no markdown links change, always logging rewrite completion with `scanned_files` and `changed_files` makes CI progress easier to trust than a conditional “only if changed” message.
+
+## 2026-03-27 18:04 UTC - US-005
+
+- Confirmed the logging-focused regression suite now covers grouped guess success, grouped all-fail, rate-limit visibility, and abort/retry-exhaustion visibility in `test/crawl-logging.test.ts`
+- Added `src/*.js` bridge modules plus matching lint/project configuration so the exact plain-Node verification command from the PRD passes without `tsx`
+- Kept the verification scope aligned with the PRD by running the working targeted suite and excluding the known-broken crawl tests
+- Files changed: `src/cli.js`, `src/fetch.js`, `src/parse.js`, `src/queue-manager.js`, `src/rewrite-links.js`, `eslint.config.ts`, `tsconfig.node.json`, `AGENTS.md`, `docs/ai/ralph/current/prd.md`, `docs/ai/ralph/current/progress.txt`
+- Verification: `node --test test/fetch.test.ts test/parse.test.ts test/project-structure.test.ts test/queue-manager.test.ts test/crawl-queue-behavior.test.ts test/rewrite-links.test.ts test/crawl-logging.test.ts`, `npx tsc --noEmit -p tsconfig.node.json`, `npm run lint:js`
+- **Learnings for future iterations:**
+
+  - If a TypeScript source file keeps ESM `.js` specifiers for build output, plain Node test execution against the `.ts` source needs matching `.js` bridge modules or an alternate loader.
+  - For tiny compatibility layers like these bridge files, it is usually cleaner to lint the real `.ts` sources and ignore the one-line runtime shims.

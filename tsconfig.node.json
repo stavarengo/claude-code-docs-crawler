@@ -49,6 +49,7 @@
     "useDefineForClassFields": true
   },
   "include": [
+    "src/**/*.js",
     "src/**/*.ts",
     "test/**/*.ts",
     "pwa-assets.config.ts",

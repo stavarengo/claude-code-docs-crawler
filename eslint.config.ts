@@ -21,7 +21,18 @@ const markdownBase = {
 }
 
 export default defineConfig([
-  globalIgnores([".idea/**", ".vscode/**", "**/*.d.ts", "content/**", ".devcontainer/**"], "Global Ignores"),
+  globalIgnores([
+    ".idea/**",
+    ".vscode/**",
+    "**/*.d.ts",
+    "content/**",
+    ".devcontainer/**",
+    "src/cli.js",
+    "src/fetch.js",
+    "src/parse.js",
+    "src/queue-manager.js",
+    "src/rewrite-links.js",
+  ], "Global Ignores"),
   ...globSync("**/.gitignore", { ignore: ["node_modules/**"], absolute: true }).map((rootGitIgnoreFile) => {
     return includeIgnoreFile(rootGitIgnoreFile, `'Global Ignores from ${path.relative(__dirname, rootGitIgnoreFile)}'`)
   }),

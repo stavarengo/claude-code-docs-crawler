@@ -1,14 +1,16 @@
 import { describe, it } from "node:test"
 import assert from "node:assert"
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
+import { createServer, type RequestListener } from "node:http"
 import { existsSync, readFileSync, rmSync } from "node:fs"
 import path from "node:path"
 import { crawl, type SeedConfig } from "../src/crawl.ts"
 
 const TEST_CONTENT_DIR = path.resolve("tmp/test-crawl-queue-behavior")
+type RequestHandler = RequestListener
+interface ServerContext { baseUrl: string, requestCounts: Map<string, number> }
 
 function listenOnRandomPort(
-  handler: (req: IncomingMessage, res: ServerResponse) => void,
+  handler: RequestHandler,
 ): Promise<{ baseUrl: string, requestCounts: Map<string, number>, close: () => Promise<void> }> {
   const requestCounts = new Map<string, number>()
   const server = createServer((req, res) => {
@@ -30,7 +32,7 @@ function listenOnRandomPort(
         baseUrl: `http://127.0.0.1:${String(address.port)}`,
         requestCounts,
         close: () => new Promise((closeResolve, closeReject) => {
-          server.close(err => {
+          server.close((err) => {
             if (err) {
               closeReject(err)
               return
@@ -53,8 +55,9 @@ async function runCrawl(seeds: SeedConfig[]) {
 }
 
 async function withServer(
-  handler: (req: IncomingMessage, res: ServerResponse) => void,
-  run: (ctx: { baseUrl: string, requestCounts: Map<string, number> }) => Promise<void>,
+  handler: RequestHandler,
+  // eslint-disable-next-line no-unused-vars
+  run: (ctx: ServerContext) => Promise<void>,
 ) {
   rmSync(TEST_CONTENT_DIR, { recursive: true, force: true })
   const server = await listenOnRandomPort(handler)

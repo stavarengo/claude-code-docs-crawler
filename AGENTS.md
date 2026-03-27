@@ -27,6 +27,10 @@ This is the only option short of removing `exactOptionalPropertyTypes` or droppi
   `projectService`), so all files resolve against the real tsconfig with full strict
   settings.
 - `jiti` is a dev dependency required for ESLint to load the TypeScript config file.
+- Plain `node --test` against `.ts` test files only works for crawler modules that import
+  local `.js` specifiers because `src/*.js` bridge files re-export the corresponding
+  `.ts` modules. Keep those bridge files in sync with the TypeScript module names and
+  keep them ignored in ESLint.
 
 ## ESM Script Guard Pattern
 
@@ -55,7 +59,7 @@ override these via `process.env` before calling `crawl()` and restore them in a
 
 - `crawl.test.ts` and `crawl-metadata.test.ts` are **broken** (`ERR_MODULE_NOT_FOUND`
   for `./fetch.js`). Do not debug. Working suite:
-  ```
+  ```sh
   node --test test/fetch.test.ts test/parse.test.ts test/project-structure.test.ts
   npx tsc --noEmit -p tsconfig.node.json
   ```

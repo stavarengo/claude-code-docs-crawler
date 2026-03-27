@@ -108,7 +108,7 @@ export function rewriteMarkdownLinks(
     const line = lines[i] ?? ""
 
     // Toggle fenced code blocks on lines that start with ```
-    if (/^```/.test(line.trimStart())) {
+    if (line.trimStart().startsWith("```")) {
       inFence = !inFence
       continue
     }
@@ -186,8 +186,8 @@ async function maybePrintGitDiff(opts: { absPath: string, updatedContent: string
         afterPath,
       ],
       {
-      encoding: "utf-8",
-      maxBuffer: 10 * 1024 * 1024,
+        encoding: "utf-8",
+        maxBuffer: 10 * 1024 * 1024,
       },
     )
 

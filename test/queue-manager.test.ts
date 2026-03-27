@@ -1,13 +1,15 @@
 import { describe, it, beforeEach, afterEach } from "node:test"
 import assert from "node:assert"
-import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http"
+import { createServer, type RequestListener, type Server } from "node:http"
 import { QueueManager } from "../src/queue-manager.ts"
 
+type RequestHandler = RequestListener
+
 function listenOnRandomPort(
-  handler: (req: IncomingMessage, res: ServerResponse) => void,
+  handler: RequestHandler,
   host?: string,
 ): Promise<{ server: Server, baseUrl: string }> {
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     const s = createServer(handler)
     const onListening = () => {
       const addr = s.address() as { port: number }
@@ -66,8 +68,9 @@ describe("QueueManager: concurrency enforcement", () => {
     const qm = new QueueManager(2)
 
     // Submit 6 requests with a delay so they overlap
-    const promises = Array.from({ length: 6 }, (_, i) =>
-      qm.fetch(`${baseUrl}/page-${String(i)}?delay=50`, scopePrefixes),
+    const promises = Array.from(
+      { length: 6 },
+      (_, i) => qm.fetch(`${baseUrl}/page-${String(i)}?delay=50`, scopePrefixes),
     )
 
     await Promise.all(promises)

@@ -1,7 +1,7 @@
 # PRD: Crawl Output Observability
 
 **Project:** claude-code-docs-crawler
-**Branch:**
+**Branch:** ralph/003.2026-03-27.crawl-output-observability
 
 ## Introduction
 
@@ -31,7 +31,7 @@ clearer logs.
 ## User Stories
 
 ### US-001: Add structured plain-text logging primitives
-**Status:** pending
+**Status:** done
 **Description:** As a developer, I want a small internal logging helper in `src/crawl.ts`
 so that all crawl events use stable severity prefixes and consistent formatting.
 
@@ -49,7 +49,7 @@ so that all crawl events use stable severity prefixes and consistent formatting.
 - [ ] `npm run lint:js` passes
 
 ### US-002: Group markdown guess outcomes by original URL
-**Status:** pending
+**Status:** done
 **Description:** As a pipeline operator, I want all guessed markdown attempts reported
 under the original URL so that fallback behavior is visible without noisy standalone
 errors.
@@ -76,7 +76,7 @@ errors.
 - [ ] `npm run lint:js` passes
 
 ### US-003: Make blockers, retries, and aborts explicit
-**Status:** pending
+**Status:** done
 **Description:** As a CI user, I want temporary blockers and terminal failures to be
 clearly labeled so I can tell whether the crawler is waiting, retrying, or giving up.
 
@@ -96,7 +96,7 @@ clearly labeled so I can tell whether the crawler is waiting, retrying, or givin
 - [ ] `npm run lint:js` passes
 
 ### US-004: Emit lifecycle and summary events for crawl progress
-**Status:** pending
+**Status:** done
 **Description:** As a pipeline operator, I want run-start, seed-start, save, rewrite,
 seed-summary, and run-summary messages so I can understand progress without reading raw
 code.
@@ -121,7 +121,7 @@ code.
 - [ ] `npm run lint:js` passes
 
 ### US-005: Add regression tests for visible logging behavior
-**Status:** pending
+**Status:** done
 **Description:** As a developer, I want console-output tests around grouped guesses and
 blockers so that future crawl refactors do not reintroduce misleading logs.
 

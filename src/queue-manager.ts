@@ -3,7 +3,7 @@ import { fetchWithRedirects, type FetchResult } from "./fetch.js"
 interface PendingFetch {
   url: string
   scopePrefixes: string[]
-  resolve: (result: FetchResult) => void
+  resolve: PromiseWithResolvers<FetchResult>["resolve"]
 }
 
 class DomainQueue {
@@ -18,7 +18,7 @@ class DomainQueue {
   }
 
   enqueue(url: string, scopePrefixes: string[]): Promise<FetchResult> {
-    return new Promise<FetchResult>(resolve => {
+    return new Promise<FetchResult>((resolve) => {
       this.pending.push({ url, scopePrefixes, resolve })
       this.drain()
     })
@@ -38,7 +38,7 @@ class DomainQueue {
       const entry = this.pending.shift()!
       this.inFlight++
       fetchWithRedirects(entry.url, entry.scopePrefixes)
-        .then(result => {
+        .then((result) => {
           entry.resolve(result)
           this.inFlight--
           this.drain()

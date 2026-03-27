@@ -76,6 +76,49 @@ function getRepoRoot(): string {
 const REPO_ROOT = getRepoRoot()
 const DEFAULT_CONTENT_DIR = path.join(REPO_ROOT, "content")
 const DOWNLOADS_SUBDIR = "docs"
+type LogLevel = "INFO" | "NOTICE" | "WARN" | "ERROR" | "SUMMARY"
+type LogValue = boolean | number | string | null | undefined
+
+function quoteLogValue(value: string): string {
+  return JSON.stringify(value)
+}
+
+function formatLogValue(value: LogValue): string {
+  if (value === null) return "null"
+  if (typeof value === "number" || typeof value === "boolean") return String(value)
+  if (typeof value !== "string") return String(value)
+  if (value.length === 0) return "\"\""
+  if (/^[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=-]+$/.test(value)) return value
+  return quoteLogValue(value)
+}
+
+function formatLogEvent(level: LogLevel, event: string, fields: Record<string, LogValue> = {}): string {
+  const parts = [`[${level}]`, event]
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined) continue
+    parts.push(`${key}=${formatLogValue(value)}`)
+  }
+  return parts.join(" ")
+}
+
+function logEvent(level: LogLevel, event: string, fields: Record<string, LogValue> = {}): void {
+  const message = formatLogEvent(level, event, fields)
+  switch (level) {
+    case "WARN":
+      console.warn(message)
+      return
+    case "ERROR":
+      console.error(message)
+      return
+    default:
+      console.log(message)
+  }
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message
+  return String(error)
+}
 
 function assertWithinRepoRoot(absPath: string, label: string) {
   const normalized = path.resolve(absPath)
@@ -129,7 +172,7 @@ function getMarkdownGuesses(url: string): string[] {
 
 export type SaveResult = "new" | "changed" | "unchanged"
 
-export async function saveContent(url: string, body: string, contentDir: string = DEFAULT_CONTENT_DIR, localPrefix: string = ""): Promise<SaveResult> {
+export async function saveContent(url: string, body: string, contentDir = DEFAULT_CONTENT_DIR, localPrefix = ""): Promise<SaveResult> {
   const resolvedContentDir = resolveContentDir(contentDir)
   const parsed = new URL(url)
   let filePath = localPrefix
@@ -149,13 +192,11 @@ export async function saveContent(url: string, body: string, contentDir: string 
     }
     await mkdirAsync(path.dirname(filePath), { recursive: true })
     await writeFileAsync(filePath, body, "utf-8")
-    console.log(`Saved: ${filePath}`)
     return "changed"
   }
 
   await mkdirAsync(path.dirname(filePath), { recursive: true })
   await writeFileAsync(filePath, body, "utf-8")
-  console.log(`Saved: ${filePath}`)
   return "new"
 }
 
@@ -262,7 +303,7 @@ export function markRemovedItems(
   }
 }
 
-function urlToRelativePath(url: string, localPrefix: string = ""): string {
+function urlToRelativePath(url: string, localPrefix = ""): string {
   const parsed = new URL(url)
   let filePath = localPrefix
     ? path.join(localPrefix, parsed.host, parsed.pathname)
@@ -283,6 +324,48 @@ interface CrawlGroupResult {
 interface PendingUrl {
   url: string
   bestEffort: boolean
+  guessGroupOriginalUrl?: string
+  guessAttemptKind?: GuessAttemptKind
+}
+
+type GuessAttemptKind = "original" | "guess"
+
+interface GuessAttemptState {
+  kind: GuessAttemptKind
+  outcome?: string
+}
+
+interface GuessGroupState {
+  originalUrl: string
+  attempts: Map<string, GuessAttemptState>
+  winnerUrl?: string
+  closed: boolean
+}
+
+interface CrawlResultCounts {
+  successCount: number
+  skippedCount: number
+  failedCount: number
+}
+
+function countItemsByStatus(items: Iterable<ItemRecord>): CrawlResultCounts {
+  const counts: CrawlResultCounts = {
+    successCount: 0,
+    skippedCount: 0,
+    failedCount: 0,
+  }
+
+  for (const item of items) {
+    if (item.status === "success") {
+      counts.successCount++
+    } else if (item.status === "skipped") {
+      counts.skippedCount++
+    } else if (item.status === "failed") {
+      counts.failedCount++
+    }
+  }
+
+  return counts
 }
 
 async function crawlSeed(
@@ -302,24 +385,161 @@ async function crawlSeed(
   let consecutive429s = 0
   let aborted = false
 
+  logEvent("INFO", "seed.start", {
+    seed: seed.seedUrl,
+    scope_prefix: seed.scopePrefix,
+    additional_scope_prefixes: JSON.stringify(seed.additionalScopePrefixes),
+    local_prefix: seed.localPrefix,
+  })
+
   const items = new Map<string, ItemRecord>()
   const urlResolution: Record<string, UrlResolutionEntry> = {}
+  const guessGroups = new Map<string, GuessGroupState>()
 
-  function enqueue(url: string, opts?: { bestEffort?: boolean }) {
+  function enqueue(url: string, opts?: {
+    bestEffort?: boolean
+    guessGroupOriginalUrl?: string
+    guessAttemptKind?: GuessAttemptKind
+  }): string | null {
     const normalized = normalize(url)
-    if (!normalized) return
-    if (accepted.has(normalized)) return
-    pending.push({
+    if (!normalized) return null
+    if (accepted.has(normalized)) return null
+    const pendingUrl: PendingUrl = {
       url: normalized,
       bestEffort: opts?.bestEffort === true,
-    })
+    }
+    if (opts?.guessGroupOriginalUrl !== undefined) {
+      pendingUrl.guessGroupOriginalUrl = opts.guessGroupOriginalUrl
+    }
+    if (opts?.guessAttemptKind !== undefined) {
+      pendingUrl.guessAttemptKind = opts.guessAttemptKind
+    }
+    pending.push(pendingUrl)
     accepted.add(normalized)
+    return normalized
+  }
+
+  function getOrCreateGuessGroup(originalUrl: string): GuessGroupState {
+    let group = guessGroups.get(originalUrl)
+    if (!group) {
+      group = {
+        originalUrl,
+        attempts: new Map<string, GuessAttemptState>(),
+        closed: false,
+      }
+      guessGroups.set(originalUrl, group)
+    }
+    return group
+  }
+
+  function ensureGuessAttempt(group: GuessGroupState, candidateUrl: string, kind: GuessAttemptKind): void {
+    if (!group.attempts.has(candidateUrl)) {
+      group.attempts.set(candidateUrl, { kind })
+    }
+  }
+
+  function countResolvedAttempts(group: GuessGroupState): number {
+    let resolved = 0
+    for (const attempt of group.attempts.values()) {
+      if (attempt.outcome !== undefined) {
+        resolved++
+      }
+    }
+    return resolved
+  }
+
+  function formatGuessAttempts(group: GuessGroupState): string {
+    const parts: string[] = []
+    for (const [candidateUrl, attempt] of group.attempts) {
+      if (attempt.outcome === undefined) continue
+      parts.push(`${attempt.kind}:${candidateUrl}->${attempt.outcome}`)
+    }
+    return parts.join(";")
+  }
+
+  function maybeEmitGuessGroupOutcome(group: GuessGroupState): void {
+    if (group.closed) return
+    const totalAttempts = group.attempts.size
+    const resolvedAttempts = countResolvedAttempts(group)
+    if (totalAttempts === 0 || resolvedAttempts < totalAttempts) return
+
+    group.closed = true
+    const attempts = formatGuessAttempts(group)
+    if (group.winnerUrl) {
+      logEvent("NOTICE", "fetch.guess_resolved", {
+        original_url: group.originalUrl,
+        winner_url: group.winnerUrl,
+        attempts,
+        resolved_attempts: resolvedAttempts,
+        total_attempts: totalAttempts,
+      })
+      return
+    }
+
+    logEvent("ERROR", "fetch.guess_failed", {
+      original_url: group.originalUrl,
+      attempts,
+      resolved_attempts: resolvedAttempts,
+      total_attempts: totalAttempts,
+    })
+  }
+
+  function recordGuessAttemptOutcome(
+    entry: PendingUrl,
+    outcome: string,
+    opts?: { succeeded?: boolean, winnerUrl?: string },
+  ): boolean {
+    const groupOriginalUrl = entry.guessGroupOriginalUrl
+    if (!groupOriginalUrl) return false
+
+    const group = guessGroups.get(groupOriginalUrl)
+    if (!group) return false
+
+    const existing = group.attempts.get(entry.url)
+    if (!existing) {
+      group.attempts.set(entry.url, {
+        kind: entry.guessAttemptKind ?? "guess",
+        outcome,
+      })
+    } else {
+      existing.outcome ??= outcome
+    }
+
+    if (opts?.succeeded) {
+      group.winnerUrl ??= opts.winnerUrl ?? entry.url
+    }
+
+    maybeEmitGuessGroupOutcome(group)
+    return true
   }
 
   function enqueueMarkdownGuesses(url: string) {
-    for (const guess of getMarkdownGuesses(url)) {
-      enqueue(guess, { bestEffort: true })
+    const normalizedOriginal = normalize(url)
+    if (!normalizedOriginal) return
+
+    const group = getOrCreateGuessGroup(normalizedOriginal)
+    const originalAttempt = group.attempts.get(normalizedOriginal)
+    if (!originalAttempt) {
+      group.attempts.set(normalizedOriginal, {
+        kind: "original",
+        outcome: "markdown_guess_started",
+      })
+    } else {
+      originalAttempt.outcome ??= "markdown_guess_started"
     }
+
+    for (const guess of getMarkdownGuesses(normalizedOriginal)) {
+      const queuedGuess = enqueue(guess, {
+        bestEffort: true,
+        guessGroupOriginalUrl: normalizedOriginal,
+        guessAttemptKind: "guess",
+      })
+      if (queuedGuess) {
+        ensureGuessAttempt(group, queuedGuess, "guess")
+      }
+    }
+
+    maybeEmitGuessGroupOutcome(group)
   }
 
   function requeue(entry: PendingUrl) {
@@ -346,6 +566,7 @@ async function crawlSeed(
         const isDocsDomain = result.finalUrl.startsWith(primaryScopePrefix)
 
         if (isHtml && isDocsDomain) {
+          recordGuessAttemptOutcome(entry, "html_response")
           // HTML from docs domain: extract canonical to discover the markdown URL
           const canonical = extractCanonical(result.body)
           if (canonical && canonical !== result.finalUrl) {
@@ -354,6 +575,7 @@ async function crawlSeed(
           }
           enqueueMarkdownGuesses(result.finalUrl)
         } else if (isHtml && result.finalUrl.startsWith("https://github.com/")) {
+          recordGuessAttemptOutcome(entry, "html_response")
           // HTML from GitHub: try the raw.githubusercontent.com version if it's a .md file
           const rawUrl = toRawGitHubUrl(result.finalUrl)
           if (rawUrl?.endsWith(".md")) {
@@ -366,12 +588,21 @@ async function crawlSeed(
         } else {
           const changeStatus = await saveContent(result.finalUrl, result.body, downloadsDir, localPrefix)
           const key = urlToRelativePath(result.finalUrl, localPrefix)
+          logEvent("INFO", "content.saved", {
+            status: changeStatus,
+            url: result.finalUrl,
+            path: key,
+          })
           urlResolution[url] = { finalUrl: result.finalUrl, savedPath: key }
           urlResolution[result.finalUrl] = { finalUrl: result.finalUrl, savedPath: key }
           items.set(key, {
             status: "success",
             statusReason: changeStatus,
             fetchedAt: new Date().toISOString(),
+          })
+          recordGuessAttemptOutcome(entry, "success", {
+            succeeded: true,
+            winnerUrl: result.finalUrl,
           })
           for (const newUrl of parseUrls(result.body, result.finalUrl, scopePrefixes)) {
             enqueue(newUrl)
@@ -382,16 +613,28 @@ async function crawlSeed(
 
       case "rate-limited": {
         consecutive429s++
+        const delay = result.retryAfter ?? 5000
+        const hostname = new URL(url).hostname
         if (consecutive429s >= 3) {
-          console.error("\x1b[31mAborting: 3 consecutive 429 responses\x1b[0m")
+          logEvent("ERROR", "crawl.aborted", {
+            reason: "consecutive_rate_limit",
+            consecutive_429s: consecutive429s,
+            url,
+            domain: hostname,
+            effect: "run_aborted",
+          })
           aborted = true
           break
         }
-        const delay = result.retryAfter ?? 5000
-        console.log(`Rate limited, waiting ${String(delay)}ms...`)
-        const hostname = new URL(url).hostname
+        logEvent("WARN", "fetch.rate_limited", {
+          url,
+          domain: hostname,
+          retry_in_ms: delay,
+          next_action: bestEffort ? "mark_failed" : "requeue",
+        })
         queueManager.pauseDomain(hostname, delay)
         if (bestEffort) {
+          recordGuessAttemptOutcome(entry, "rate_limited")
           markFailed(url)
           break
         }
@@ -402,8 +645,16 @@ async function crawlSeed(
       case "error": {
         consecutive429s = 0
         const errorKey = result.status ? String(result.status) : (result.reason ?? "unknown")
-        console.log(`\x1b[31mError fetching ${url}: ${errorKey}\x1b[0m`)
         if (bestEffort || result.status === 404 || result.status === 406) {
+          const handledByGuessGroup = recordGuessAttemptOutcome(entry, errorKey)
+          if (!handledByGuessGroup) {
+            logEvent("ERROR", "fetch.failed", {
+              url,
+              error: errorKey,
+              next_action: "mark_failed",
+              best_effort: bestEffort,
+            })
+          }
           markFailed(url)
         } else {
           const prev = consecutiveErrors.get(url)
@@ -412,9 +663,20 @@ async function crawlSeed(
             : { count: 1, error: errorKey }
           consecutiveErrors.set(url, entry)
           if (entry.count >= 3) {
-            console.log(`\x1b[31mGiving up on ${url} after 3 consecutive ${errorKey} errors\x1b[0m`)
+            logEvent("ERROR", "fetch.give_up", {
+              url,
+              terminal_reason: errorKey,
+              retry_count: entry.count,
+              next_action: "mark_failed",
+            })
             markFailed(url)
           } else {
+            logEvent("ERROR", "fetch.failed", {
+              url,
+              error: errorKey,
+              retry_count: entry.count,
+              next_action: "requeue",
+            })
             requeue({
               url,
               bestEffort: false,
@@ -425,7 +687,11 @@ async function crawlSeed(
       }
 
       case "out-of-scope":
-        console.log(`Skipped out-of-scope redirect: ${url} → ${result.redirectedTo}`)
+        recordGuessAttemptOutcome(entry, "out_of_scope")
+        logEvent("INFO", "fetch.skipped_out_of_scope", {
+          url,
+          redirected_to: result.redirectedTo,
+        })
         items.set(url, {
           status: "skipped",
           statusReason: "redirectOutOfScope",
@@ -434,7 +700,11 @@ async function crawlSeed(
         break
 
       case "non-text":
-        console.log(`Skipped non-text content: ${url} (${result.contentType})`)
+        recordGuessAttemptOutcome(entry, "non_text")
+        logEvent("INFO", "fetch.skipped_non_text", {
+          url,
+          content_type: result.contentType,
+        })
         break
     }
   }
@@ -456,9 +726,12 @@ async function crawlSeed(
           inFlight.delete(promise)
           submitPending()
         })
-        .catch(err => {
+        .catch((err) => {
           inFlight.delete(promise)
-          console.error(`\x1b[31mUnexpected error processing ${url}:\x1b[0m`, err)
+          logEvent("ERROR", "fetch.unexpected", {
+            url,
+            error: getErrorMessage(err),
+          })
         })
       inFlight.add(promise)
     }
@@ -492,6 +765,14 @@ export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[]
 
   const contentDir = resolveContentDir(process.env["CONTENT_DIR"] ?? DEFAULT_CONTENT_DIR)
   const downloadsDir = path.join(contentDir, DOWNLOADS_SUBDIR)
+  const concurrencyPerDomain = opts?.concurrency ?? 10
+
+  logEvent("INFO", "run.start", {
+    content_dir: contentDir,
+    downloads_dir: downloadsDir,
+    concurrency_per_domain: concurrencyPerDomain,
+    seed_count: seeds.length,
+  })
 
   // Load prior crawl metadata if it exists
   const metadataPath = path.join(contentDir, "crawl-metadata.json")
@@ -512,6 +793,18 @@ export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[]
   const seedResults = await Promise.all(seeds.map(seed =>
     crawlSeed(seed, downloadsDir, queueManager)
       .then(result => ({ seed, result }))))
+
+  for (const { seed, result } of seedResults) {
+    const counts = countItemsByStatus(result.items.values())
+    logEvent("SUMMARY", "seed.summary", {
+      seed: seed.seedUrl,
+      fetched_count: result.fetchedCount,
+      success_count: counts.successCount,
+      skipped_count: counts.skippedCount,
+      failed_count: counts.failedCount,
+      aborted: result.aborted,
+    })
+  }
 
   // Aggregate seed results by localPrefix for post-processing and metadata merge.
   const groups = new Map<string, CrawlGroupResult>()
@@ -551,10 +844,12 @@ export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[]
       ? { showGitDiff: opts?.showGitDiff === true, subDir: localPrefix }
       : { showGitDiff: opts?.showGitDiff === true }
     const rewriteResult = await rewriteMarkdownLinksInContent(downloadsDir, result.urlResolution, rewriteOptions)
+    logEvent("INFO", "content.rewrite_completed", {
+      changed_files: rewriteResult.stats.changedFiles,
+      scanned_files: rewriteResult.stats.scannedFiles,
+      local_prefix: localPrefix,
+    })
     if (rewriteResult.stats.changedFiles > 0) {
-      console.log(
-        `Rewrote links in ${String(rewriteResult.stats.changedFiles)}/${String(rewriteResult.stats.scannedFiles)} markdown files.`,
-      )
       for (const savedPath of rewriteResult.changedSavedPaths) {
         const item = result.items.get(savedPath)
         if (item?.status === "success" && item.statusReason === "unchanged") {
@@ -580,8 +875,18 @@ export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[]
 
   await mkdirAsync(path.dirname(metadataPath), { recursive: true })
   await writeFileAsync(metadataPath, JSON.stringify(metadata, null, 2), "utf-8")
-  console.log(`Metadata written to ${metadataPath}`)
-  console.log(`Done. Fetched ${String(totalFetched)} pages.`)
+  logEvent("INFO", "metadata.written", {
+    path: metadataPath,
+    result: metadata.result,
+  })
+  logEvent("SUMMARY", "run.summary", {
+    fetched_pages: totalFetched,
+    result: metadata.result,
+    metadata_path: metadataPath,
+    failed_count: metadata.stats["failed"],
+    seeds_completed: seedResults.filter(({ result }) => !result.aborted).length,
+    seeds_aborted: seedResults.filter(({ result }) => result.aborted).length,
+  })
 }
 
 // Only run crawl when executed directly as a script (not when imported)
