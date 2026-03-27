@@ -138,19 +138,16 @@ describe("US-006: Integration test for full crawl pipeline", () => {
     // 4 pages successfully fetched (seed, page-a, page-b, page-c).
     // /docs/redirect is an in-scope 301 → /docs/page-b. fetchWithRedirects follows it
     // transparently and returns success with finalUrl=page-b, so the redirect URL itself
-    // never appears in items. page-b is saved twice (once directly, once via the redirect)
-    // so its final statusReason is "unchanged".
+    // never appears in items. page-b may be saved twice (once directly, once via the
+    // redirect). With concurrent fetching the save order is non-deterministic, so page-b
+    // may end up as either "new" or "unchanged".
     const successItems = Object.entries(metadata.items).filter(([, v]) => v.status === "success")
     assert.strictEqual(successItems.length, 4, "4 pages crawled successfully")
 
-    // 3 items are "new", page-b is "unchanged" (saved twice due to redirect)
     const newItems = successItems.filter(([, v]) => v.statusReason === "new")
     const unchangedItems = successItems.filter(([, v]) => v.statusReason === "unchanged")
-    assert.strictEqual(newItems.length, 3, "3 pages are new")
-    assert.strictEqual(unchangedItems.length, 1, "page-b is unchanged (fetched again via redirect)")
-    const unchangedEntry = unchangedItems[0]
-    assert.ok(unchangedEntry, "unchanged entry exists")
-    assert.ok(unchangedEntry[0].includes("page-b"), "the unchanged item is page-b")
+    assert.ok(newItems.length >= 3 && newItems.length <= 4, `expected 3-4 new items, got ${String(newItems.length)}`)
+    assert.ok(unchangedItems.length <= 1, `expected 0-1 unchanged items, got ${String(unchangedItems.length)}`)
 
     // The out-of-scope link is filtered by parseUrls and never enqueued,
     // so no skipped items appear in metadata
@@ -159,9 +156,171 @@ describe("US-006: Integration test for full crawl pipeline", () => {
 
     // --- Assert stats ---
     assert.strictEqual(metadata.stats["success"], 4)
-    assert.strictEqual(metadata.stats["success.new"], 3)
-    assert.strictEqual(metadata.stats["success.unchanged"], 1)
+    assert.ok(
+      (metadata.stats["success.new"] ?? 0) >= 3 && (metadata.stats["success.new"] ?? 0) <= 4,
+      `expected 3-4 success.new, got ${String(metadata.stats["success.new"])}`,
+    )
+    assert.ok(
+      (metadata.stats["success.unchanged"] ?? 0) <= 1,
+      `expected 0-1 success.unchanged, got ${String(metadata.stats["success.unchanged"])}`,
+    )
     assert.strictEqual(metadata.stats["failed"], 0)
+  })
+})
+
+describe("crawlGroup uses QueueManager for concurrent fetches", () => {
+  it("fetches discovered URLs concurrently via QueueManager, not sequentially", async () => {
+    // The seed page links to 4 pages. With concurrency, the server should see
+    // multiple requests in-flight simultaneously (maxInFlight > 1).
+    // With sequential fetching, maxInFlight would be exactly 1.
+    let inFlight = 0
+    let maxInFlight = 0
+
+    // Replace the server with one that tracks in-flight requests
+    server.close()
+    server = createServer((req, res) => {
+      const url = req.url ?? "/"
+
+      if (url === "/docs/redirect") {
+        res.writeHead(301, { location: `http://localhost:${String(port)}/docs/page-b` })
+        res.end()
+        return
+      }
+
+      const body = pages[url]
+      if (body !== undefined) {
+        inFlight++
+        if (inFlight > maxInFlight) maxInFlight = inFlight
+        // Add a small delay so concurrent requests overlap
+        setTimeout(() => {
+          inFlight--
+          res.writeHead(200, { "content-type": "text/plain; charset=utf-8" })
+          res.end(body)
+        }, 50)
+        return
+      }
+
+      res.writeHead(404, { "content-type": "text/plain" })
+      res.end("Not Found")
+    })
+    server.listen(0)
+    port = (server.address() as { port: number }).port
+    baseUrl = `http://localhost:${String(port)}`
+
+    // Use a flat page structure so all links are discovered at once
+    pages["/docs/"] = [
+      "# Docs Home",
+      `[Page A](/docs/page-a)`,
+      `[Page B](/docs/page-b)`,
+      `[Page C](/docs/page-c)`,
+    ].join("\n")
+
+    process.env["SEED_URL"] = `${baseUrl}/docs/`
+    process.env["SCOPE_PREFIX"] = `${baseUrl}/docs/`
+    process.env["CONTENT_DIR"] = TEST_CONTENT_DIR
+
+    try {
+      await crawl()
+    } finally {
+      delete process.env["SEED_URL"]
+      delete process.env["SCOPE_PREFIX"]
+      delete process.env["CONTENT_DIR"]
+    }
+
+    // With concurrent fetching, after discovering links from the seed page,
+    // pages a, b, and c should be fetched concurrently
+    assert.ok(maxInFlight > 1, `expected concurrent in-flight requests but maxInFlight was ${String(maxInFlight)}`)
+
+    // All pages should still be saved correctly
+    const host = `localhost:${String(port)}`
+    assert.ok(existsSync(path.join(TEST_CONTENT_DIR, "docs", host, "docs", "index.txt")), "seed saved")
+    assert.ok(existsSync(path.join(TEST_CONTENT_DIR, "docs", host, "docs", "page-a", "index.txt")), "page-a saved")
+    assert.ok(existsSync(path.join(TEST_CONTENT_DIR, "docs", host, "docs", "page-b", "index.txt")), "page-b saved")
+    assert.ok(existsSync(path.join(TEST_CONTENT_DIR, "docs", host, "docs", "page-c", "index.txt")), "page-c saved")
+  })
+})
+
+describe("Seed groups run in parallel", () => {
+  it("launches groups concurrently so total time is less than sum of group times", async () => {
+    // Two seed groups with different localPrefixes hit the same server.
+    // Each response takes ~100ms. If groups ran sequentially, total time
+    // would be >= 200ms (2 groups x 100ms). If parallel, total time should
+    // be ~100ms (both groups' fetches overlap).
+    const GROUP_DELAY = 100
+
+    server.close()
+    server = createServer((req, res) => {
+      const url = req.url ?? "/"
+      const body = pages[url]
+      if (body !== undefined) {
+        setTimeout(() => {
+          res.writeHead(200, { "content-type": "text/plain; charset=utf-8" })
+          res.end(body)
+        }, GROUP_DELAY)
+        return
+      }
+      res.writeHead(404, { "content-type": "text/plain" })
+      res.end("Not Found")
+    })
+    server.listen(0)
+    port = (server.address() as { port: number }).port
+    baseUrl = `http://localhost:${String(port)}`
+
+    // Group A pages
+    pages["/group-a/"] = "# Group A Home"
+    // Group B pages
+    pages["/group-b/"] = "# Group B Home"
+
+    const seeds: SeedConfig[] = [
+      {
+        seedUrl: `${baseUrl}/group-a/`,
+        scopePrefix: `${baseUrl}/group-a/`,
+        additionalScopePrefixes: [],
+        localPrefix: "alpha",
+      },
+      {
+        seedUrl: `${baseUrl}/group-b/`,
+        scopePrefix: `${baseUrl}/group-b/`,
+        additionalScopePrefixes: [],
+        localPrefix: "beta",
+      },
+    ]
+
+    process.env["CONTENT_DIR"] = TEST_CONTENT_DIR
+
+    try {
+      const start = Date.now()
+      await crawl({ seeds })
+      const elapsed = Date.now() - start
+
+      // If sequential: ~200ms (2 x 100ms). If parallel: ~100ms.
+      // Use 180ms threshold to allow some margin but still detect sequential.
+      assert.ok(
+        elapsed < GROUP_DELAY * 2 - 20,
+        `expected parallel execution (elapsed ${String(elapsed)}ms < ${String(GROUP_DELAY * 2 - 20)}ms)`,
+      )
+    } finally {
+      delete process.env["CONTENT_DIR"]
+    }
+
+    const host = `localhost:${String(port)}`
+
+    // Both groups' pages should be saved under their respective localPrefix
+    const groupAPath = path.join(TEST_CONTENT_DIR, "docs", "alpha", host, "group-a", "index.txt")
+    const groupBPath = path.join(TEST_CONTENT_DIR, "docs", "beta", host, "group-b", "index.txt")
+    assert.ok(existsSync(groupAPath), `group A page saved at ${groupAPath}`)
+    assert.ok(existsSync(groupBPath), `group B page saved at ${groupBPath}`)
+
+    // Verify content
+    assert.strictEqual(readFileSync(groupAPath, "utf-8"), pages["/group-a/"])
+    assert.strictEqual(readFileSync(groupBPath, "utf-8"), pages["/group-b/"])
+
+    // Verify metadata includes both groups
+    const metadataPath = path.join(TEST_CONTENT_DIR, "crawl-metadata.json")
+    const metadata = JSON.parse(readFileSync(metadataPath, "utf-8")) as {
+      stats: Record<string, number>
+    }
+    assert.strictEqual(metadata.stats["success"], 2, "both groups' pages counted")
   })
 })
 

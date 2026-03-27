@@ -3,10 +3,12 @@ import { promisify } from "node:util"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
 import { execSync } from "node:child_process"
-import { fetchWithRedirects } from "./fetch.js"
+import type { FetchResult } from "./fetch.js"
 import { parseUrls } from "./parse.js"
 import { rewriteMarkdownLinksInContent } from "./rewrite-links.js"
 import type { UrlResolutionEntry } from "./url-resolution.js"
+import { QueueManager } from "./queue-manager.js"
+import { parseCliArgs } from "./cli.js"
 
 const mkdirAsync = promisify(mkdir)
 const writeFileAsync = promisify(writeFile)
@@ -74,8 +76,6 @@ function getRepoRoot(): string {
 const REPO_ROOT = getRepoRoot()
 const DEFAULT_CONTENT_DIR = path.join(REPO_ROOT, "content")
 const DOWNLOADS_SUBDIR = "docs"
-
-const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
 function assertWithinRepoRoot(absPath: string, label: string) {
   const normalized = path.resolve(absPath)
@@ -273,11 +273,12 @@ async function crawlGroup(
   groupSeeds: SeedConfig[],
   localPrefix: string,
   downloadsDir: string,
+  queueManager: QueueManager,
 ): Promise<CrawlGroupResult> {
   const scopePrefixes = groupSeeds.flatMap(s => [s.scopePrefix, ...s.additionalScopePrefixes])
   const primaryScopePrefixes = groupSeeds.map(s => s.scopePrefix)
 
-  const queue: string[] = []
+  const pending: string[] = []
   const queued = new Set<string>()
   const fetched = new Set<string>()
   const consecutiveErrors = new Map<string, { count: number, error: string }>()
@@ -292,31 +293,16 @@ async function crawlGroup(
     const normalized = normalize(url)
     if (!normalized) return
     if (queued.has(normalized) || fetched.has(normalized) || failed.has(normalized)) return
-    queue.push(normalized)
+    pending.push(normalized)
     queued.add(normalized)
   }
 
-  function dequeue(): string | undefined {
-    const url = queue.shift()
-    if (url) queued.delete(url)
-    return url
-  }
-
   function requeue(url: string) {
-    queue.push(url)
+    pending.push(url)
     queued.add(url)
   }
 
-  for (const seed of groupSeeds) {
-    enqueue(seed.seedUrl)
-  }
-
-  while (queue.length > 0) {
-    const url = dequeue()
-    if (!url) continue
-
-    const result = await fetchWithRedirects(url, scopePrefixes)
-
+  async function processResult(url: string, result: FetchResult): Promise<void> {
     switch (result.type) {
       case "success": {
         consecutive429s = 0
@@ -327,7 +313,6 @@ async function crawlGroup(
         const isDocsDomain = primaryScopePrefixes.some(prefix => result.finalUrl.startsWith(prefix))
 
         if (isHtml && isDocsDomain) {
-          // HTML from docs domain: extract canonical to discover the markdown URL
           const canonical = extractCanonical(result.body)
           if (canonical && canonical !== result.finalUrl) {
             enqueue(canonical)
@@ -339,7 +324,6 @@ async function crawlGroup(
             enqueue(result.finalUrl.endsWith("/") ? result.finalUrl + "index.md" : result.finalUrl + ".md")
           }
         } else if (isHtml && result.finalUrl.startsWith("https://github.com/")) {
-          // HTML from GitHub: try the raw.githubusercontent.com version if it's a .md file
           const rawUrl = toRawGitHubUrl(result.finalUrl)
           if (rawUrl?.endsWith(".md")) {
             const rawSavedPath = urlToRelativePath(rawUrl, localPrefix)
@@ -374,7 +358,8 @@ async function crawlGroup(
         }
         const delay = result.retryAfter ?? 5000
         console.log(`Rate limited, waiting ${String(delay)}ms...`)
-        await sleep(delay)
+        const hostname = new URL(url).hostname
+        queueManager.pauseDomain(hostname, delay)
         requeue(url)
         break
       }
@@ -424,8 +409,37 @@ async function crawlGroup(
         console.log(`Skipped non-text content: ${url} (${result.contentType})`)
         break
     }
+  }
 
-    if (aborted) break
+  for (const seed of groupSeeds) {
+    enqueue(seed.seedUrl)
+  }
+
+  // Concurrent fetch loop: submit all pending URLs to the QueueManager,
+  // process results as they resolve, and submit newly discovered URLs
+  const inFlight = new Set<Promise<void>>()
+
+  function submitPending(): void {
+    while (pending.length > 0 && !aborted) {
+      const url = pending.shift()!
+      queued.delete(url)
+
+      const promise = queueManager.fetch(url, scopePrefixes)
+        .then(result => processResult(url, result))
+        .then(() => {
+          inFlight.delete(promise)
+          // After processing, submit any newly discovered URLs
+          submitPending()
+        })
+      inFlight.add(promise)
+    }
+  }
+
+  submitPending()
+
+  // Wait until all in-flight fetches complete
+  while (inFlight.size > 0 && !aborted) {
+    await Promise.race(inFlight)
   }
 
   return { items, urlResolution, fetchedCount: fetched.size, aborted }
@@ -433,7 +447,7 @@ async function crawlGroup(
 
 // Main crawl function — accepts config via environment variables:
 //   SEED_URL, SCOPE_PREFIX, CONTENT_DIR (all fall back to hardcoded defaults)
-export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[] }) {
+export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[], concurrency?: number }) {
   // Determine seeds: env var override (single seed) > opts.seeds > SEEDS constant
   let seeds: SeedConfig[]
   if (process.env["SEED_URL"]) {
@@ -470,14 +484,22 @@ export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[]
     groups.set(seed.localPrefix, group)
   }
 
+  const queueManager = new QueueManager(opts?.concurrency)
+
+  // Launch all seed groups concurrently — each group has its own dedup state,
+  // scope rules, and items; only the QueueManager is shared.
+  const groupEntries = Array.from(groups.entries())
+  const groupResults = await Promise.all(groupEntries.map(([localPrefix, groupSeeds]) =>
+    crawlGroup(groupSeeds, localPrefix, downloadsDir, queueManager)
+      .then(result => ({ localPrefix, result }))))
+
+  // Post-group processing runs after all groups complete
   const allItems = new Map<string, ItemRecord>()
   const allUrlResolution: Record<string, UrlResolutionEntry> = {}
   let anyAborted = false
   let totalFetched = 0
 
-  for (const [localPrefix, groupSeeds] of groups) {
-    const result = await crawlGroup(groupSeeds, localPrefix, downloadsDir)
-
+  for (const { localPrefix, result } of groupResults) {
     // Mark pages from prior run that were not visited in this group
     const groupPreviousItems: Record<string, ItemRecord> = {}
     for (const [key, item] of Object.entries(previousItems)) {
@@ -528,8 +550,6 @@ export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[]
 // Only run crawl when executed directly as a script (not when imported)
 const __filename = fileURLToPath(import.meta.url)
 if (process.argv[1] && (process.argv[1] === __filename || process.argv[1].endsWith("src/crawl.ts"))) {
-  const showGitDiff = process.argv.includes("--show-diff")
-    || process.argv.includes("--diff")
-    || process.argv.includes("--show-git-diff")
-  crawl({ showGitDiff })
+  const cliArgs = parseCliArgs(process.argv.slice(2))
+  crawl(cliArgs)
 }

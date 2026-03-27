@@ -1,6 +1,0 @@
-# PRD: Parallel Crawl with Per-Domain Concurrency
-
-Base commit: d1f92eb7f661040d428345e80771abef29109c4a
-
-## Codebase Patterns
-

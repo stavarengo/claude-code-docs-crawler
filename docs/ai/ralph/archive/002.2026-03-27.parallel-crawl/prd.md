@@ -19,7 +19,7 @@ The crawler currently fetches pages one at a time, sequentially. With hundreds o
 
 ### US-001: QueueManager and DomainQueue
 
-**Status:** pending
+**Status:** done
 **Description:** As a developer, I need a QueueManager module that routes fetch requests to per-domain queues with concurrency control, so that multiple HTTP fetches can run in parallel without overwhelming any single domain.
 
 **Acceptance Criteria:**
@@ -41,7 +41,7 @@ The crawler currently fetches pages one at a time, sequentially. With hundreds o
 
 ### US-002: Refactor crawlGroup to Use QueueManager
 
-**Status:** pending
+**Status:** done
 **Description:** As a developer, I need `crawlGroup` to use the shared QueueManager for HTTP fetches instead of fetching sequentially, so that discovered URLs are fetched concurrently within the group.
 
 **Acceptance Criteria:**
@@ -60,7 +60,7 @@ The crawler currently fetches pages one at a time, sequentially. With hundreds o
 
 ### US-003: Parallelize Seed Groups
 
-**Status:** pending
+**Status:** done
 **Description:** As a user, I want all seed groups to crawl in parallel so that multi-domain crawls complete faster.
 
 **Acceptance Criteria:**
@@ -75,7 +75,7 @@ The crawler currently fetches pages one at a time, sequentially. With hundreds o
 
 ### US-004: CLI --concurrency Flag
 
-**Status:** pending
+**Status:** done
 **Description:** As a user, I want to control the per-domain concurrency via a `--concurrency` CLI flag so I can tune parallelism for different network conditions.
 
 **Acceptance Criteria:**
