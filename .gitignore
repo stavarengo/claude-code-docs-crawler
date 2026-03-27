@@ -4,3 +4,5 @@ node_modules/
 .husky/
 .github/prompts/
 tmp/
+.claude/worktrees/
+docs/ai/ralph/current
