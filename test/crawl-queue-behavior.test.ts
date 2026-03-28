@@ -117,6 +117,47 @@ describe("crawl queue behavior", () => {
     })
   })
 
+  it("inserts .md before query params when guessing markdown URLs", async () => {
+    await withServer((req, res) => {
+      const [urlPath, query] = (req.url ?? "/").split("?")
+      switch (urlPath) {
+        case "/docs/":
+          res.writeHead(200, { "content-type": "text/plain; charset=utf-8" })
+          res.end("[Pricing](/docs/pricing?tab=flex)")
+          return
+
+        case "/docs/pricing":
+          res.writeHead(200, { "content-type": "text/html; charset=utf-8" })
+          res.end("<html><body>Pricing</body></html>")
+          return
+
+        case "/docs/pricing.md":
+          if (query === "tab=flex") {
+            res.writeHead(200, { "content-type": "text/plain; charset=utf-8" })
+            res.end("# Pricing Flex\n")
+            return
+          }
+          res.writeHead(404, { "content-type": "text/plain; charset=utf-8" })
+          res.end("Not Found")
+          return
+
+        default:
+          res.writeHead(404, { "content-type": "text/plain; charset=utf-8" })
+          res.end("Not Found")
+      }
+    }, async ({ baseUrl, requestCounts }) => {
+      await runCrawl([{
+        seedUrl: `${baseUrl}/docs/`,
+        scopePrefix: `${baseUrl}/docs/`,
+        additionalScopePrefixes: [],
+        localPrefix: "",
+      }])
+
+      assert.strictEqual(requestCounts.get("/docs/pricing.md?tab=flex"), 1,
+        "should request /docs/pricing.md?tab=flex (md before query)")
+    })
+  })
+
   it("accepts a URL only once per seed even if it is rediscovered after an error", async () => {
     await withServer((req, res) => {
       switch (req.url) {

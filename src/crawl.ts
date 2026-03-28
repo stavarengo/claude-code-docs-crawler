@@ -160,14 +160,26 @@ function extractCanonical(html: string): string | null {
 }
 
 function getMarkdownGuesses(url: string): string[] {
-  if (url.endsWith(".md")) return []
-  if (url.endsWith("/")) {
+  // Split URL into path portion and suffix (query + fragment), preserved verbatim
+  const qIdx = url.indexOf("?")
+  const hIdx = url.indexOf("#")
+  let splitAt = -1
+  if (qIdx !== -1 && hIdx !== -1) splitAt = Math.min(qIdx, hIdx)
+  else if (qIdx !== -1) splitAt = qIdx
+  else if (hIdx !== -1) splitAt = hIdx
+
+  const pathPart = splitAt === -1 ? url : url.slice(0, splitAt)
+  const suffix = splitAt === -1 ? "" : url.slice(splitAt)
+
+  if (pathPart.endsWith(".md")) return []
+
+  if (pathPart.endsWith("/")) {
     return [
-      `${url}index.md`,
-      `${url.slice(0, -1)}.md`,
+      `${pathPart}index.md${suffix}`,
+      `${pathPart.slice(0, -1)}.md${suffix}`,
     ]
   }
-  return [`${url}.md`]
+  return [`${pathPart}.md${suffix}`]
 }
 
 export type SaveResult = "new" | "changed" | "unchanged"
