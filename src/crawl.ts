@@ -45,6 +45,12 @@ export const SEEDS: SeedConfig[] = [
     additionalScopePrefixes: [],
     localPrefix: "openai",
   },
+  {
+    seedUrl: "https://developers.openai.com/codex/llms.txt",
+    scopePrefix: "https://developers.openai.com/codex/",
+    additionalScopePrefixes: [],
+    localPrefix: "openai",
+  },
   // {
   //   seedUrl: "https://modelcontextprotocol.io/llms.txt",
   //   scopePrefix: "https://modelcontextprotocol.io/",
