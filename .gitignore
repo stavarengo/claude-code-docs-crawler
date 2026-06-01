@@ -6,3 +6,4 @@ node_modules/
 tmp/
 .claude/worktrees/
 docs/ai/ralph/current
+.pnpm-store/
