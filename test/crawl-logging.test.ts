@@ -250,6 +250,101 @@ describe("crawl logging", () => {
     }
   })
 
+  it("tries an Edit this page on GitHub fallback before skipping additional-scope HTML", async () => {
+    cleanup()
+
+    const originalFetch = globalThis.fetch
+    const rawUrl = "https://raw.githubusercontent.com/example/site/refs/heads/main/docs/radix-page.mdx"
+    let rawRequests = 0
+
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url
+
+      if (url === rawUrl) {
+        rawRequests++
+        return new Response("# Radix page from GitHub\n", {
+          status: 200,
+          headers: { "content-type": "text/markdown; charset=utf-8" },
+        })
+      }
+
+      return originalFetch(input, init)
+    }
+
+    const server = await listenOnRandomPort((req, res) => {
+      switch (req.url) {
+        case "/docs/":
+          res.writeHead(200, { "content-type": "text/plain; charset=utf-8" })
+          res.end("[Radix](/radix/page)\n")
+          return
+
+        case "/radix/page":
+          res.writeHead(200, { "content-type": "text/html; charset=utf-8" })
+          res.end([
+            "<!doctype html>",
+            "<html><body>",
+            "<a href=\"https://github.com/example/site/edit/main/docs/radix-page.mdx\" title=\"Edit this page on GitHub.\">",
+            "Edit this page on GitHub.",
+            "</a>",
+            "</body></html>",
+          ].join("\n"))
+          return
+
+        default:
+          res.writeHead(404, { "content-type": "text/plain; charset=utf-8" })
+          res.end("Not Found")
+      }
+    })
+
+    try {
+      await withCapturedConsole(async (calls) => {
+        await runCrawl([{
+          seedUrl: `${server.baseUrl}/docs/`,
+          scopePrefix: `${server.baseUrl}/docs/`,
+          additionalScopePrefixes: [`${server.baseUrl}/radix/`],
+          localPrefix: "",
+        }])
+
+        const savedPath = path.join(
+          TEST_CONTENT_DIR,
+          "docs",
+          "raw.githubusercontent.com",
+          "example",
+          "site",
+          "refs",
+          "heads",
+          "main",
+          "docs",
+          "radix-page.mdx",
+        )
+
+        assert.strictEqual(rawRequests, 1)
+        assert.strictEqual(readFileSync(savedPath, "utf-8"), "# Radix page from GitHub\n")
+
+        const rendered = calls.map(call => String(call.args[0] ?? ""))
+        assert.ok(
+          rendered.some(line =>
+            line.startsWith("[WARN] content.discarded_html ")
+            && line.includes(`url=${server.baseUrl}/radix/page`)
+            && line.includes("next_action=fetch_github_edit_fallback")),
+        )
+        assert.ok(
+          rendered.some(line =>
+            line.startsWith("[NOTICE] fetch.github_fallback_queued ")
+            && line.includes(`original_url=${server.baseUrl}/radix/page`)
+            && line.includes(`raw_url=${rawUrl}`)),
+        )
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+      await server.close()
+    }
+  })
+
   it("emits WARN and ERROR events for repeated 429 responses", async () => {
     cleanup()
 

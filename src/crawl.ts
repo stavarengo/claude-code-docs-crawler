@@ -576,6 +576,30 @@ async function crawlSeed(
     return true
   }
 
+  function enqueueStandaloneGitHubEditFallback(
+    originalUrl: string,
+    sourceUrl: string,
+    body: string,
+  ): string | null {
+    const rawUrl = extractEditThisPageGitHubUrl(body)
+    if (!rawUrl) return null
+
+    const rawSavedPath = urlToRelativePath(rawUrl, localPrefix)
+    urlResolution[originalUrl] = { finalUrl: rawUrl, savedPath: rawSavedPath }
+    urlResolution[sourceUrl] = { finalUrl: rawUrl, savedPath: rawSavedPath }
+    urlResolution[rawUrl] = { finalUrl: rawUrl, savedPath: rawSavedPath }
+
+    const queuedFallback = enqueue(rawUrl, { bestEffort: true })
+    if (!queuedFallback) return null
+
+    logEvent("NOTICE", "fetch.github_fallback_queued", {
+      original_url: originalUrl,
+      source_url: sourceUrl,
+      raw_url: queuedFallback,
+    })
+    return queuedFallback
+  }
+
   function maybeEmitGuessGroupOutcome(group: GuessGroupState): void {
     if (group.closed) return
     const totalAttempts = group.attempts.size
@@ -719,6 +743,9 @@ async function crawlSeed(
         if (isHtmlDocument) {
           markSkippedHtmlDocument(key)
           rememberHtmlFallback(entry, result.body)
+          const standaloneFallbackUrl = (isDocsDomain || isGitHubUrl)
+            ? null
+            : enqueueStandaloneGitHubEditFallback(url, result.finalUrl, result.body)
 
           if (isDocsDomain) {
             logDiscardedHtmlDocument(result, key, htmlValidationTrigger, "try_markdown_guess")
@@ -742,7 +769,12 @@ async function crawlSeed(
               enqueue(rawUrl, { bestEffort: true })
             }
           } else {
-            logDiscardedHtmlDocument(result, key, htmlValidationTrigger, "mark_skipped")
+            logDiscardedHtmlDocument(
+              result,
+              key,
+              htmlValidationTrigger,
+              standaloneFallbackUrl ? "fetch_github_edit_fallback" : "mark_skipped",
+            )
             recordGuessAttemptOutcome(entry, "html_document")
           }
 
