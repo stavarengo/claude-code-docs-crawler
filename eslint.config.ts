@@ -30,6 +30,7 @@ export default defineConfig([
     "src/cli.js",
     "src/fetch.js",
     "src/parse.js",
+    "src/output.js",
     "src/queue-manager.js",
     "src/rewrite-links.js",
   ], "Global Ignores"),

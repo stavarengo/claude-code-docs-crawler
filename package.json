@@ -36,5 +36,8 @@
     "tsx": "^4.7.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.54.0"
+  },
+  "dependencies": {
+    "picocolors": "1.1.1"
   }
 }

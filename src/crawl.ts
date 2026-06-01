@@ -9,6 +9,7 @@ import { rewriteMarkdownLinksInContent } from "./rewrite-links.js"
 import type { UrlResolutionEntry } from "./url-resolution.js"
 import { QueueManager } from "./queue-manager.js"
 import { parseCliArgs } from "./cli.js"
+import { logEvent, logSection } from "./output.js"
 
 const mkdirAsync = promisify(mkdir)
 const writeFileAsync = promisify(writeFile)
@@ -82,44 +83,6 @@ function getRepoRoot(): string {
 const REPO_ROOT = getRepoRoot()
 const DEFAULT_CONTENT_DIR = path.join(REPO_ROOT, "content")
 const DOWNLOADS_SUBDIR = "docs"
-type LogLevel = "INFO" | "NOTICE" | "WARN" | "ERROR" | "SUMMARY"
-type LogValue = boolean | number | string | null | undefined
-
-function quoteLogValue(value: string): string {
-  return JSON.stringify(value)
-}
-
-function formatLogValue(value: LogValue): string {
-  if (value === null) return "null"
-  if (typeof value === "number" || typeof value === "boolean") return String(value)
-  if (typeof value !== "string") return String(value)
-  if (value.length === 0) return "\"\""
-  if (/^[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=-]+$/.test(value)) return value
-  return quoteLogValue(value)
-}
-
-function formatLogEvent(level: LogLevel, event: string, fields: Record<string, LogValue> = {}): string {
-  const parts = [`[${level}]`, event]
-  for (const [key, value] of Object.entries(fields)) {
-    if (value === undefined) continue
-    parts.push(`${key}=${formatLogValue(value)}`)
-  }
-  return parts.join(" ")
-}
-
-function logEvent(level: LogLevel, event: string, fields: Record<string, LogValue> = {}): void {
-  const message = formatLogEvent(level, event, fields)
-  switch (level) {
-    case "WARN":
-      console.warn(message)
-      return
-    case "ERROR":
-      console.error(message)
-      return
-    default:
-      console.log(message)
-  }
-}
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message
@@ -901,6 +864,12 @@ export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[]
   const downloadsDir = path.join(contentDir, DOWNLOADS_SUBDIR)
   const concurrencyPerDomain = opts?.concurrency ?? 10
 
+  logSection("Crawl Run", {
+    content_dir: contentDir,
+    downloads_dir: downloadsDir,
+    concurrency_per_domain: concurrencyPerDomain,
+    seed_count: seeds.length,
+  })
   logEvent("INFO", "run.start", {
     content_dir: contentDir,
     downloads_dir: downloadsDir,
@@ -930,6 +899,14 @@ export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[]
 
   for (const { seed, result } of seedResults) {
     const counts = countItemsByStatus(result.items.values())
+    logSection("Seed Summary", {
+      seed: seed.seedUrl,
+      fetched_count: result.fetchedCount,
+      success_count: counts.successCount,
+      skipped_count: counts.skippedCount,
+      failed_count: counts.failedCount,
+      aborted: result.aborted,
+    })
     logEvent("SUMMARY", "seed.summary", {
       seed: seed.seedUrl,
       fetched_count: result.fetchedCount,
@@ -1012,6 +989,14 @@ export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[]
   logEvent("INFO", "metadata.written", {
     path: metadataPath,
     result: metadata.result,
+  })
+  logSection("Run Summary", {
+    fetched_pages: totalFetched,
+    result: metadata.result,
+    metadata_path: metadataPath,
+    failed_count: metadata.stats["failed"],
+    seeds_completed: seedResults.filter(({ result }) => !result.aborted).length,
+    seeds_aborted: seedResults.filter(({ result }) => result.aborted).length,
   })
   logEvent("SUMMARY", "run.summary", {
     fetched_pages: totalFetched,
