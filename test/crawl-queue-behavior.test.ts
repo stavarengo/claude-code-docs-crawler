@@ -73,6 +73,88 @@ async function withServer(
 }
 
 describe("crawl queue behavior", () => {
+  it("uses an Edit this page on GitHub raw fallback after all markdown guesses fail", async () => {
+    const originalFetch = globalThis.fetch
+    const rawUrl = "https://raw.githubusercontent.com/example/docs/refs/heads/main/docs/foo.mdx"
+    let rawRequests = 0
+
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url
+
+      if (url === rawUrl) {
+        rawRequests++
+        return new Response("# Foo from GitHub\n", {
+          status: 200,
+          headers: { "content-type": "text/markdown; charset=utf-8" },
+        })
+      }
+
+      return originalFetch(input, init)
+    }
+
+    try {
+      await withServer((req, res) => {
+        switch (req.url) {
+          case "/docs/":
+            res.writeHead(200, { "content-type": "text/plain; charset=utf-8" })
+            res.end("[Foo](/docs/foo/)")
+            return
+
+          case "/docs/foo/":
+            res.writeHead(200, { "content-type": "text/html; charset=utf-8" })
+            res.end([
+              "<!doctype html>",
+              "<html><body>",
+              "<a href=\"https://github.com/example/docs/edit/main/docs/foo.mdx\">Edit this page on GitHub</a>",
+              "</body></html>",
+            ].join("\n"))
+            return
+
+          case "/docs/foo.md":
+          case "/docs/foo/index.md":
+            res.writeHead(404, { "content-type": "text/plain; charset=utf-8" })
+            res.end("Not Found")
+            return
+
+          default:
+            res.writeHead(404, { "content-type": "text/plain; charset=utf-8" })
+            res.end("Not Found")
+        }
+      }, async ({ baseUrl, requestCounts }) => {
+        await runCrawl([{
+          seedUrl: `${baseUrl}/docs/`,
+          scopePrefix: `${baseUrl}/docs/`,
+          additionalScopePrefixes: [],
+          localPrefix: "",
+        }])
+
+        const savedPath = path.join(
+          TEST_CONTENT_DIR,
+          "docs",
+          "raw.githubusercontent.com",
+          "example",
+          "docs",
+          "refs",
+          "heads",
+          "main",
+          "docs",
+          "foo.mdx",
+        )
+
+        assert.strictEqual(requestCounts.get("/docs/foo.md"), 1)
+        assert.strictEqual(requestCounts.get("/docs/foo/index.md"), 1)
+        assert.strictEqual(rawRequests, 1)
+        assert.strictEqual(readFileSync(savedPath, "utf-8"), "# Foo from GitHub\n")
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   it("guesses both /foo/index.md and /foo.md for directory URLs and does not retry guessed failures", async () => {
     await withServer((req, res) => {
       switch (req.url) {
@@ -153,8 +235,11 @@ describe("crawl queue behavior", () => {
         localPrefix: "",
       }])
 
-      assert.strictEqual(requestCounts.get("/docs/pricing.md?tab=flex"), 1,
-        "should request /docs/pricing.md?tab=flex (md before query)")
+      assert.strictEqual(
+        requestCounts.get("/docs/pricing.md?tab=flex"),
+        1,
+        "should request /docs/pricing.md?tab=flex (md before query)",
+      )
     })
   })
 

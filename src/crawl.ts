@@ -117,15 +117,47 @@ function normalize(url: string): string | null {
 }
 
 function toRawGitHubUrl(url: string): string | null {
-  const match = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/blob\/(.+)$/.exec(url)
+  const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:blob|edit)\/([^/]+)\/(.+)$/.exec(url)
   if (!match) return null
-  return `https://raw.githubusercontent.com/${match[1]}/${match[2]}`
+  return `https://raw.githubusercontent.com/${match[1]}/${match[2]}/refs/heads/${match[3]}/${match[4]}`
 }
 
 function extractCanonical(html: string): string | null {
   const match = (/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i.exec(html))
     ?? (/<link[^>]+href=["']([^"']+)["'][^>]+rel=["']canonical["']/i.exec(html))
   return match?.[1] ?? null
+}
+
+function decodeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll("&amp;", "&")
+    .replaceAll("&quot;", "\"")
+    .replaceAll("&#39;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+}
+
+function stripHtmlTags(value: string): string {
+  return value.replace(/<[^>]*>/g, " ")
+}
+
+function extractEditThisPageGitHubUrl(html: string): string | null {
+  const anchorPattern = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
+  let match: RegExpExecArray | null
+
+  while ((match = anchorPattern.exec(html)) !== null) {
+    const href = match[1]
+    if (!href) continue
+    const text = stripHtmlTags(match[2] ?? "").replace(/\s+/g, " ").trim()
+    if (!/edit\s+this\s+page\s+on\s+github/i.test(text)) continue
+
+    const rawUrl = toRawGitHubUrl(decodeHtmlAttribute(href))
+    if (rawUrl && /\.(?:md|mdx)(?:[?#].*)?$/i.test(rawUrl)) {
+      return rawUrl
+    }
+  }
+
+  return null
 }
 
 function getContentTypeEssence(contentType: string): string {
@@ -152,8 +184,13 @@ function getUrlExtension(url: string): string {
   return path.posix.extname(new URL(url).pathname).toLowerCase()
 }
 
+function hasMarkdownFileExtension(url: string): boolean {
+  const extension = getUrlExtension(url)
+  return extension === ".md" || extension === ".mdx"
+}
+
 function getHtmlValidationTrigger(url: string, contentType: string): string | null {
-  const hasMarkdownExtension = getUrlExtension(url) === ".md"
+  const hasMarkdownExtension = hasMarkdownFileExtension(url)
   const hasMarkdownContentType = isMarkdownContentType(contentType)
 
   if (hasMarkdownExtension && hasMarkdownContentType) return null
@@ -364,7 +401,7 @@ interface PendingUrl {
   guessAttemptKind?: GuessAttemptKind
 }
 
-type GuessAttemptKind = "original" | "guess"
+type GuessAttemptKind = "original" | "guess" | "github_fallback"
 
 interface GuessAttemptState {
   kind: GuessAttemptKind
@@ -375,6 +412,10 @@ interface GuessGroupState {
   originalUrl: string
   attempts: Map<string, GuessAttemptState>
   winnerUrl?: string
+  htmlFallback?: {
+    sourceUrl: string
+    body: string
+  }
   closed: boolean
 }
 
@@ -493,15 +534,57 @@ async function crawlSeed(
     return parts.join(";")
   }
 
+  function rememberHtmlFallback(entry: PendingUrl, body: string): void {
+    const groupOriginalUrl = entry.guessGroupOriginalUrl ?? normalize(entry.url)
+    if (!groupOriginalUrl) return
+
+    const group = getOrCreateGuessGroup(groupOriginalUrl)
+    if (group.htmlFallback) return
+
+    group.htmlFallback = {
+      sourceUrl: entry.url,
+      body,
+    }
+  }
+
+  function enqueueGitHubEditFallback(group: GuessGroupState): boolean {
+    if (!group.htmlFallback) return false
+
+    const rawUrl = extractEditThisPageGitHubUrl(group.htmlFallback.body)
+    if (!rawUrl) return false
+
+    const queuedFallback = enqueue(rawUrl, {
+      bestEffort: true,
+      guessGroupOriginalUrl: group.originalUrl,
+      guessAttemptKind: "github_fallback",
+    })
+
+    if (!queuedFallback) {
+      group.attempts.set(rawUrl, {
+        kind: "github_fallback",
+        outcome: "not_queued",
+      })
+      return false
+    }
+
+    ensureGuessAttempt(group, queuedFallback, "github_fallback")
+    logEvent("NOTICE", "fetch.github_fallback_queued", {
+      original_url: group.originalUrl,
+      source_url: group.htmlFallback.sourceUrl,
+      raw_url: queuedFallback,
+    })
+    return true
+  }
+
   function maybeEmitGuessGroupOutcome(group: GuessGroupState): void {
     if (group.closed) return
     const totalAttempts = group.attempts.size
     const resolvedAttempts = countResolvedAttempts(group)
     if (totalAttempts === 0 || resolvedAttempts < totalAttempts) return
 
-    group.closed = true
     const attempts = formatGuessAttempts(group)
     if (group.winnerUrl) {
+      group.closed = true
       logEvent("NOTICE", "fetch.guess_resolved", {
         original_url: group.originalUrl,
         winner_url: group.winnerUrl,
@@ -512,6 +595,9 @@ async function crawlSeed(
       return
     }
 
+    if (enqueueGitHubEditFallback(group)) return
+
+    group.closed = true
     logEvent("ERROR", "fetch.guess_failed", {
       original_url: group.originalUrl,
       attempts,
@@ -632,6 +718,7 @@ async function crawlSeed(
 
         if (isHtmlDocument) {
           markSkippedHtmlDocument(key)
+          rememberHtmlFallback(entry, result.body)
 
           if (isDocsDomain) {
             logDiscardedHtmlDocument(result, key, htmlValidationTrigger, "try_markdown_guess")
@@ -644,10 +731,10 @@ async function crawlSeed(
             enqueueMarkdownGuesses(result.finalUrl)
           } else if (isGitHubUrl) {
             const rawUrl = toRawGitHubUrl(result.finalUrl)
-            const nextAction = rawUrl?.endsWith(".md") === true ? "fetch_raw_github_markdown" : "mark_skipped"
+            const nextAction = rawUrl && hasMarkdownFileExtension(rawUrl) ? "fetch_raw_github_markdown" : "mark_skipped"
             logDiscardedHtmlDocument(result, key, htmlValidationTrigger, nextAction)
             recordGuessAttemptOutcome(entry, "html_response")
-            if (rawUrl?.endsWith(".md")) {
+            if (rawUrl && hasMarkdownFileExtension(rawUrl)) {
               const rawSavedPath = urlToRelativePath(rawUrl, localPrefix)
               urlResolution[url] = { finalUrl: rawUrl, savedPath: rawSavedPath }
               urlResolution[result.finalUrl] = { finalUrl: rawUrl, savedPath: rawSavedPath }
@@ -663,6 +750,7 @@ async function crawlSeed(
         }
 
         if (isHtml && isDocsDomain) {
+          rememberHtmlFallback(entry, result.body)
           recordGuessAttemptOutcome(entry, "html_response")
           // HTML from docs domain: extract canonical to discover the markdown URL
           const canonical = extractCanonical(result.body)
@@ -672,10 +760,11 @@ async function crawlSeed(
           }
           enqueueMarkdownGuesses(result.finalUrl)
         } else if (isHtml && isGitHubUrl) {
+          rememberHtmlFallback(entry, result.body)
           recordGuessAttemptOutcome(entry, "html_response")
           // HTML from GitHub: try the raw.githubusercontent.com version if it's a .md file
           const rawUrl = toRawGitHubUrl(result.finalUrl)
-          if (rawUrl?.endsWith(".md")) {
+          if (rawUrl && hasMarkdownFileExtension(rawUrl)) {
             const rawSavedPath = urlToRelativePath(rawUrl, localPrefix)
             urlResolution[url] = { finalUrl: rawUrl, savedPath: rawSavedPath }
             urlResolution[result.finalUrl] = { finalUrl: rawUrl, savedPath: rawSavedPath }
