@@ -9,7 +9,7 @@ import { rewriteMarkdownLinksInContent } from "./rewrite-links.js"
 import type { UrlResolutionEntry } from "./url-resolution.js"
 import { QueueManager } from "./queue-manager.js"
 import { parseCliArgs } from "./cli.js"
-import { logEvent, logSection } from "./output.js"
+import { finishOutput, logEvent, logSection } from "./output.js"
 
 const mkdirAsync = promisify(mkdir)
 const writeFileAsync = promisify(writeFile)
@@ -1006,6 +1006,7 @@ export async function crawl(opts?: { showGitDiff?: boolean, seeds?: SeedConfig[]
     seeds_completed: seedResults.filter(({ result }) => !result.aborted).length,
     seeds_aborted: seedResults.filter(({ result }) => result.aborted).length,
   })
+  finishOutput()
 }
 
 // Only run crawl when executed directly as a script (not when imported)
