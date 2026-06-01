@@ -23,6 +23,14 @@ export interface SeedConfig {
 
 export const SEEDS: SeedConfig[] = [
   {
+    seedUrl: "https://ui.shadcn.com/llms.txt",
+    scopePrefix: "https://ui.shadcn.com/docs",
+    additionalScopePrefixes: [
+      "https://www.radix-ui.com/",
+    ],
+    localPrefix: "shadcn",
+  },
+  {
     seedUrl: "https://code.claude.com/docs/llms.txt",
     scopePrefix: "https://code.claude.com/docs/en/",
     additionalScopePrefixes: ["https://github.com/aws-solutions-library-samples"],
