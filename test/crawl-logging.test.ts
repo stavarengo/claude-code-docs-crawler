@@ -1,7 +1,7 @@
 import { afterEach, describe, it } from "node:test"
 import assert from "node:assert"
 import { createServer, type RequestListener } from "node:http"
-import { mkdirSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs"
 import path from "node:path"
 import { crawl, type SeedConfig } from "../src/crawl.ts"
 
@@ -136,6 +136,7 @@ describe("crawl logging", () => {
           rendered.some(line =>
             line.startsWith("[INFO] content.saved ")
             && line.includes(`url=${server.baseUrl}/docs/`)
+            && line.includes("content_type=\"text/plain; charset=utf-8\"")
             && line.includes("status=new")),
         )
         assert.ok(
@@ -162,6 +163,87 @@ describe("crawl logging", () => {
             && line.includes("seeds_completed=1")
             && line.includes("seeds_aborted=0")),
         )
+      })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it("logs and discards full HTML documents while keeping markdown with HTML elements", async () => {
+    cleanup()
+
+    const htmlDocument = [
+      "<!doctype html>",
+      "<html>",
+      "<head><title>Not Markdown</title></head>",
+      "<body><h1>Not Markdown</h1></body>",
+      "</html>",
+    ].join("\n")
+    const markdownWithHtml = [
+      "# Markdown with HTML",
+      "",
+      "<div class=\"callout\">This inline HTML is valid markdown content.</div>",
+      "",
+    ].join("\n")
+
+    const server = await listenOnRandomPort((req, res) => {
+      switch (req.url) {
+        case "/docs/":
+          res.writeHead(200, { "content-type": "text/plain; charset=utf-8" })
+          res.end("[Full HTML](/assets/full.txt)\n[Markdown HTML](/assets/snippet.txt)\n")
+          return
+
+        case "/assets/full.txt":
+          res.writeHead(200, { "content-type": "text/plain; charset=utf-8" })
+          res.end(htmlDocument)
+          return
+
+        case "/assets/snippet.txt":
+          res.writeHead(200, { "content-type": "text/plain; charset=utf-8" })
+          res.end(markdownWithHtml)
+          return
+
+        default:
+          res.writeHead(404, { "content-type": "text/plain; charset=utf-8" })
+          res.end("Not Found")
+      }
+    })
+
+    try {
+      await withCapturedConsole(async (calls) => {
+        await runCrawl([{
+          seedUrl: `${server.baseUrl}/docs/`,
+          scopePrefix: `${server.baseUrl}/docs/`,
+          additionalScopePrefixes: [`${server.baseUrl}/assets/`],
+          localPrefix: "",
+        }])
+
+        const host = new URL(server.baseUrl).host
+        const discardedPath = path.join(TEST_CONTENT_DIR, "docs", host, "assets", "full.txt")
+        const keptPath = path.join(TEST_CONTENT_DIR, "docs", host, "assets", "snippet.txt")
+
+        assert.ok(!existsSync(discardedPath), "full HTML document should be discarded")
+        assert.strictEqual(readFileSync(keptPath, "utf-8"), markdownWithHtml)
+
+        const warnLines = calls
+          .filter(call => call.method === "warn")
+          .map(call => String(call.args[0] ?? ""))
+        const discardLine = warnLines.find(line => line.startsWith("[WARN] content.discarded_html "))
+
+        assert.ok(discardLine, "discard should be logged")
+        assert.ok(discardLine.includes(`url=${server.baseUrl}/assets/full.txt`))
+        assert.ok(discardLine.includes("path="))
+        assert.ok(discardLine.includes("content_type=\"text/plain; charset=utf-8\""))
+        assert.ok(discardLine.includes("extension=.txt"))
+        assert.ok(discardLine.includes("validation_trigger=extension_and_content_type"))
+        assert.ok(discardLine.includes("reason=html_document_detected"))
+        assert.ok(discardLine.includes("next_action=mark_skipped"))
+
+        const metadataPath = path.join(TEST_CONTENT_DIR, "crawl-metadata.json")
+        const metadata = JSON.parse(readFileSync(metadataPath, "utf-8")) as {
+          stats: Record<string, number>
+        }
+        assert.strictEqual(metadata.stats["skipped.htmlDocument"], 1)
       })
     } finally {
       await server.close()

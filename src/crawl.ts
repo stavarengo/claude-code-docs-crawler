@@ -165,6 +165,60 @@ function extractCanonical(html: string): string | null {
   return match?.[1] ?? null
 }
 
+function getContentTypeEssence(contentType: string): string {
+  return contentType.split(";", 1)[0]!.trim().toLowerCase()
+}
+
+function isHtmlContentType(contentType: string): boolean {
+  return getContentTypeEssence(contentType) === "text/html"
+}
+
+function isMarkdownContentType(contentType: string): boolean {
+  const essence = getContentTypeEssence(contentType)
+  if (!essence) return false
+
+  const [, subtype] = essence.split("/")
+  return subtype === "markdown"
+    || subtype === "x-markdown"
+    || subtype === "md"
+    || subtype?.endsWith("+markdown") === true
+    || subtype?.endsWith(".markdown") === true
+}
+
+function getUrlExtension(url: string): string {
+  return path.posix.extname(new URL(url).pathname).toLowerCase()
+}
+
+function getHtmlValidationTrigger(url: string, contentType: string): string | null {
+  const hasMarkdownExtension = getUrlExtension(url) === ".md"
+  const hasMarkdownContentType = isMarkdownContentType(contentType)
+
+  if (hasMarkdownExtension && hasMarkdownContentType) return null
+  if (!hasMarkdownExtension && !hasMarkdownContentType) return "extension_and_content_type"
+  if (!hasMarkdownExtension) return "extension"
+  return "content_type"
+}
+
+function stripHtmlDocumentPreamble(content: string): string {
+  let remaining = content.replace(/^\uFEFF/, "").trimStart()
+
+  while (remaining.startsWith("<!--")) {
+    const closeIdx = remaining.indexOf("-->")
+    if (closeIdx === -1) break
+    remaining = remaining.slice(closeIdx + 3).trimStart()
+  }
+
+  return remaining
+}
+
+function isFullHtmlDocument(content: string): boolean {
+  const trimmed = stripHtmlDocumentPreamble(content)
+  return /^<!doctype\s+html(?:\s|>)/i.test(trimmed)
+    || /^<html(?:\s|>)/i.test(trimmed)
+    || /^<head(?:\s|>)[\s\S]*<\/head>[\s\S]*<body(?:\s|>)/i.test(trimmed)
+    || /^<body(?:\s|>)[\s\S]*<\/body>/i.test(trimmed)
+}
+
 function getMarkdownGuesses(url: string): string[] {
   // Split URL into path portion and suffix (query + fragment), preserved verbatim
   const qIdx = url.indexOf("?")
@@ -269,6 +323,7 @@ export function buildMetadata({ seeds, items, urlResolution, aborted }: BuildMet
     "skipped.duplicate": 0,
     "skipped.redirectOutOfScope": 0,
     "skipped.redirectDuplicate": 0,
+    "skipped.htmlDocument": 0,
     failed: 0,
     "failed.httpError": 0,
   }
@@ -572,6 +627,31 @@ async function crawlSeed(
     })
   }
 
+  function markSkippedHtmlDocument(key: string) {
+    items.set(key, {
+      status: "skipped",
+      statusReason: "htmlDocument",
+      fetchedAt: new Date().toISOString(),
+    })
+  }
+
+  function logDiscardedHtmlDocument(
+    result: Extract<FetchResult, { type: "success" }>,
+    savedPath: string,
+    validationTrigger: string,
+    nextAction: string,
+  ) {
+    logEvent("WARN", "content.discarded_html", {
+      url: result.finalUrl,
+      path: savedPath,
+      content_type: result.contentType,
+      extension: getUrlExtension(result.finalUrl),
+      validation_trigger: validationTrigger,
+      reason: "html_document_detected",
+      next_action: nextAction,
+    })
+  }
+
   async function processResult(entry: PendingUrl, result: FetchResult): Promise<void> {
     const { url, bestEffort } = entry
 
@@ -580,8 +660,44 @@ async function crawlSeed(
         consecutive429s = 0
         fetched.add(result.finalUrl)
 
-        const isHtml = result.contentType.includes("text/html")
+        const isHtml = isHtmlContentType(result.contentType)
         const isDocsDomain = result.finalUrl.startsWith(primaryScopePrefix)
+        const isGitHubUrl = result.finalUrl.startsWith("https://github.com/")
+        const key = urlToRelativePath(result.finalUrl, localPrefix)
+        const htmlValidationTrigger = getHtmlValidationTrigger(result.finalUrl, result.contentType)
+        const isHtmlDocument = htmlValidationTrigger !== null && isFullHtmlDocument(result.body)
+
+        if (isHtmlDocument) {
+          markSkippedHtmlDocument(key)
+
+          if (isDocsDomain) {
+            logDiscardedHtmlDocument(result, key, htmlValidationTrigger, "try_markdown_guess")
+            recordGuessAttemptOutcome(entry, "html_response")
+            const canonical = extractCanonical(result.body)
+            if (canonical && canonical !== result.finalUrl) {
+              enqueue(canonical)
+              enqueueMarkdownGuesses(canonical)
+            }
+            enqueueMarkdownGuesses(result.finalUrl)
+          } else if (isGitHubUrl) {
+            const rawUrl = toRawGitHubUrl(result.finalUrl)
+            const nextAction = rawUrl?.endsWith(".md") === true ? "fetch_raw_github_markdown" : "mark_skipped"
+            logDiscardedHtmlDocument(result, key, htmlValidationTrigger, nextAction)
+            recordGuessAttemptOutcome(entry, "html_response")
+            if (rawUrl?.endsWith(".md")) {
+              const rawSavedPath = urlToRelativePath(rawUrl, localPrefix)
+              urlResolution[url] = { finalUrl: rawUrl, savedPath: rawSavedPath }
+              urlResolution[result.finalUrl] = { finalUrl: rawUrl, savedPath: rawSavedPath }
+              urlResolution[rawUrl] = { finalUrl: rawUrl, savedPath: rawSavedPath }
+              enqueue(rawUrl, { bestEffort: true })
+            }
+          } else {
+            logDiscardedHtmlDocument(result, key, htmlValidationTrigger, "mark_skipped")
+            recordGuessAttemptOutcome(entry, "html_document")
+          }
+
+          break
+        }
 
         if (isHtml && isDocsDomain) {
           recordGuessAttemptOutcome(entry, "html_response")
@@ -592,7 +708,7 @@ async function crawlSeed(
             enqueueMarkdownGuesses(canonical)
           }
           enqueueMarkdownGuesses(result.finalUrl)
-        } else if (isHtml && result.finalUrl.startsWith("https://github.com/")) {
+        } else if (isHtml && isGitHubUrl) {
           recordGuessAttemptOutcome(entry, "html_response")
           // HTML from GitHub: try the raw.githubusercontent.com version if it's a .md file
           const rawUrl = toRawGitHubUrl(result.finalUrl)
@@ -605,10 +721,10 @@ async function crawlSeed(
           }
         } else {
           const changeStatus = await saveContent(result.finalUrl, result.body, downloadsDir, localPrefix)
-          const key = urlToRelativePath(result.finalUrl, localPrefix)
           logEvent("INFO", "content.saved", {
             status: changeStatus,
             url: result.finalUrl,
+            content_type: result.contentType,
             path: key,
           })
           urlResolution[url] = { finalUrl: result.finalUrl, savedPath: key }
