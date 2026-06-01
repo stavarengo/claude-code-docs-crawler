@@ -1,3 +1,5 @@
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs"
+import path from "node:path"
 import blessed from "blessed"
 import pc from "picocolors"
 
@@ -36,8 +38,14 @@ interface TuiSession {
 const PLAIN_VALUE_RE = /^[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=-]+$/
 const MAX_RECENT_EVENTS = 18
 const MAX_SEED_SUMMARIES = 12
+const DEFAULT_TRANSCRIPT_PATH = path.join(process.cwd(), "tmp", "crawler-output.log")
 
 let tuiSession: TuiSession | null = null
+let transcriptPath: string | null = null
+
+export function getOutputTranscriptPath(): string {
+  return process.env["CRAWLER_OUTPUT_FILE"] ?? DEFAULT_TRANSCRIPT_PATH
+}
 
 function quoteOutputValue(value: string): string {
   return JSON.stringify(value)
@@ -109,6 +117,24 @@ function route(level: OutputLevel, message: string): void {
       return
     default:
       streams.log(message)
+  }
+}
+
+function appendTranscriptLine(line: string): void {
+  const outputPath = getOutputTranscriptPath()
+  try {
+    if (transcriptPath !== outputPath) {
+      mkdirSync(path.dirname(outputPath), { recursive: true })
+      writeFileSync(outputPath, [
+        `# Docs Crawler output`,
+        `# started_at=${new Date().toISOString()}`,
+        "",
+      ].join("\n"), "utf-8")
+      transcriptPath = outputPath
+    }
+    appendFileSync(outputPath, `${line}\n`, "utf-8")
+  } catch {
+    // The terminal UI must not fail the crawl if the optional transcript cannot be written.
   }
 }
 
@@ -285,7 +311,7 @@ function renderTui(session: TuiSession): void {
   session.seeds.setContent(state.seedSummaries.length > 0 ? state.seedSummaries.join("\n\n") : "No seed summaries yet.")
   session.events.setContent(state.recentEvents.join("\n"))
   session.events.setScrollPerc(100)
-  session.footer.setContent(" q / esc / ctrl-c exits   |   Set CRAWLER_PLAIN_OUTPUT=1 for structured line output")
+  session.footer.setContent(` q / esc / ctrl-c exits   |   log: ${getOutputTranscriptPath()}`)
   session.screen.render()
 }
 
@@ -341,6 +367,9 @@ function recordTuiEvent(session: TuiSession, level: OutputLevel, event: string, 
 }
 
 export function logEvent(level: OutputLevel, event: string, fields: OutputFields = {}): void {
+  const message = formatOutputEvent(level, event, fields)
+  appendTranscriptLine(message)
+
   const session = getTuiSession()
   if (session) {
     recordTuiEvent(session, level, event, fields)
@@ -348,7 +377,6 @@ export function logEvent(level: OutputLevel, event: string, fields: OutputFields
     return
   }
 
-  const message = formatOutputEvent(level, event, fields)
   if (!shouldUseColor(level)) {
     route(level, message)
     return
